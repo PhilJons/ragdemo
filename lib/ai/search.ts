@@ -3,6 +3,7 @@ import { DefaultAzureCredential } from "@azure/identity";
 import { embed } from "ai";
 import { azure } from "@ai-sdk/azure";
 import { createHash } from "crypto";
+import { generateEmbedding } from "@/lib/azureOpenAI";
 
 // Restore local embedding model and function
 const embeddingModel = azure.textEmbeddingModel(process.env.AZURE_EMBEDDING_DEPLOYMENT_NAME!);
@@ -30,30 +31,28 @@ const searchClient = new SearchClient(
 const embeddingCache = new Map<string, number[]>();
 const MAX_CACHE_SIZE = 1000;
 
-// Restore local generateEmbedding function
-export const generateEmbedding = async (value: string): Promise<number[]> => {
-  const input = value.replaceAll("\n", " ");
-  const { embedding } = await embed({
-    model: embeddingModel,
-    value: input,
-  });
-  return embedding;
-};
+// Define field names
+const contentColumn = process.env.AZURE_SEARCH_CONTENT_FIELD!;
+const embeddingFieldName = process.env.AZURE_SEARCH_VECTOR_FIELD || 'embedding';
+const sourcefileFieldName = 'sourcefile'; // Define the source file field name
 
-// findRelevantContent uses the local generateEmbedding
+if (!endpoint || !credential || !indexName) {
+  throw new Error("Azure Search environment variables not fully configured.");
+}
+
+// findRelevantContent uses the imported generateEmbedding
 export const findRelevantContent = async (userQuery: string) => {
   try {
-    // Initialize with a simpler type, let TypeScript infer
-    const searchParameters: any = { // Revert to 'any' for now
+    const searchOptions: SearchOptions<object, string> = {
       top: 5,
+      select: ["id", contentColumn, sourcefileFieldName] // Include id, content, and sourcefile
     };
 
     let semanticConfigName: string | undefined;
     if (process.env.AZURE_SEARCH_SEMANTIC_CONFIGURATION_NAME) {
       semanticConfigName = process.env.AZURE_SEARCH_SEMANTIC_CONFIGURATION_NAME;
-      searchParameters.queryType = "semantic"; // Remove 'as const'
-      searchParameters.semanticSearchOptions = {
-        configurationName: semanticConfigName,
+      searchOptions.semanticSearchOptions = { // Corrected property name
+        configurationName: semanticConfigName, // Corrected property name
       };
     }
 
@@ -61,13 +60,15 @@ export const findRelevantContent = async (userQuery: string) => {
       const vectorFieldName = process.env.AZURE_SEARCH_VECTOR_FIELD!;
       let userQueryEmbedded: number[];
 
+      // Use embedding cache (logic restored)
       if (embeddingCache.has(userQuery)) {
         userQueryEmbedded = embeddingCache.get(userQuery)!;
         console.log("Using cached embedding for query:", userQuery);
       } else {
         console.log("Generating new embedding for query:", userQuery);
-        userQueryEmbedded = await generateEmbedding(userQuery);
+        userQueryEmbedded = await generateEmbedding(userQuery); // Uses imported function
         embeddingCache.set(userQuery, userQueryEmbedded);
+        // Cache pruning logic (restored)
         if (embeddingCache.size > MAX_CACHE_SIZE) {
           const oldestKey = embeddingCache.keys().next().value;
           if (oldestKey !== undefined) {
@@ -80,38 +81,64 @@ export const findRelevantContent = async (userQuery: string) => {
       }
 
       const kCount = semanticConfigName ? 50 : 5;
-      // Remove explicit VectorQuery type for now
-      const vectorQuery = { 
-        kind: "vector" as const, // Use 'as const' here if needed
+      // Removed explicit VectorQuery type annotation
+      const vectorQuery = {
+        kind: "vector" as const, // Keep 'as const' if needed for type inference later
         fields: [vectorFieldName],
         kNearestNeighborsCount: kCount,
         vector: userQueryEmbedded,
       };
-      searchParameters.vectorSearchOptions = {
+      searchOptions.vectorSearchOptions = {
         queries: [vectorQuery],
       };
     }
 
-    const searchResults = await searchClient.search(userQuery, searchParameters);
+    // Perform the search
+    const searchResults = await searchClient.search(userQuery, searchOptions);
 
     const similarDocs = [];
-    const contentColumn = process.env.AZURE_SEARCH_CONTENT_FIELD!;
+    
     for await (const result of searchResults.results) {
-      const textField = (result.document as any).hasOwnProperty(contentColumn) ? (result.document as any)[contentColumn] : result.document;
-      const hash = createHash('sha256').update(textField).digest('base64').substring(0, 8);
-      similarDocs.push({
-        text: textField,
-        id: hash,
-        similarity: result.score,
-      });
+      const doc = result.document as any; // Use 'any' for easier access
+      // Check for required fields
+      if (doc && typeof doc.id === 'string' && 
+          typeof doc[contentColumn] === 'string' && 
+          typeof doc[sourcefileFieldName] === 'string') {
+            
+            // Use original ID if available, otherwise generate hash (as fallback or default? Decide based on need)
+            // For consistency with previous logic, let's prioritize the original ID if present.
+            // If your index key is always generated like `${originalFileId}_chunk_${i}`, 
+            // you might prefer to derive the citation ID from that.
+            // Here, we'll use the document's actual ID.
+            const docId = doc.id; 
+
+            similarDocs.push({
+                text: doc[contentColumn],
+                id: docId, // Use the document's ID
+                similarity: result.score, // Keep similarity score
+                sourcefile: doc[sourcefileFieldName] // Add sourcefile
+            });
+      } else {
+          console.warn("Skipping search result due to missing fields (id, content, or sourcefile):", doc);
+      }
     }
+
+    // Handle no results (restored)
+    if (similarDocs.length === 0) {
+      console.log("No relevant documents found by search.");
+       return [{ id: 'no-results', text: 'No relevant documents found.', similarity: 0, sourcefile: '' }];
+    }
+
     return similarDocs;
+
   } catch (error) {
     console.error("Error in findRelevantContent:", error);
+    // Restore original error structure, add empty sourcefile
     return [{
       text: "No relevant information found. There was an issue connecting to the knowledge base.",
       id: "error",
-      similarity: 0
+      similarity: 0,
+      sourcefile: ''
     }];
   }
 };
