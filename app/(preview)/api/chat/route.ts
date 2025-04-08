@@ -23,17 +23,26 @@ export async function POST(req: Request) {
       console.log(`Manually fetching context for: "${lastUserMessage.content}"`);
       try {
         const searchResults = await findRelevantContent(lastUserMessage.content);
-        const validResults = searchResults.filter(r => r.id !== 'error' && r.id !== 'no-results');
+        // Ensure the returned type matches the expected structure (including sourcefile)
+        const validResults = searchResults.filter(r => r.id !== 'error' && r.id !== 'no-results') as Array<{ id: string, text: string, sourcefile: string }>; 
         
         if (validResults.length > 0) {
-          sourceDocuments = validResults;
+          // Construct the sourceDocuments with id, text, and sourcefile
+          sourceDocuments = validResults.map(doc => ({ 
+            id: doc.id,
+            text: doc.text, // Use 'text' as expected by annotation component?
+            sourcefile: doc.sourcefile // Ensure sourcefile is included
+          }));
+
           retrievedContext = "Context from knowledge base:\n";
+          // Include sourcefile in the system prompt context if desired, or just use ID
           validResults.forEach((result, index) => {
             retrievedContext += `[Source ID: ${result.id}] ${result.text}\n`;
           });
           console.log("Context prepared (with IDs):", retrievedContext);
-          // Append sourceDocuments to the stream data immediately
-          data.append({ sourceDocuments });
+          
+          // Append the correctly structured sourceDocuments to the stream data
+          data.append({ sourceDocuments }); // Frontend expects this shape { sourceDocuments: [{ id, text, sourcefile }] }
         } else {
           console.log("No valid context found by findRelevantContent.");
         }
