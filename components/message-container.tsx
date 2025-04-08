@@ -19,7 +19,7 @@ const MessageItem: React.FC<{
 }> = React.memo(
   ({ message, showCitation }) => {
     const replaceCitationFlags = (response: string): JSX.Element => {
-      const citationRegex = /【([^】]+)】/g;
+      const citationRegex = /\[Source: ([^\\\]]+)\]/g;
       const parts: JSX.Element[] = [];
       let match;
       const citationMapping: Record<string, number> = {};
@@ -106,7 +106,7 @@ const MessageContainer: React.FC<MessageContainerProps> = React.memo(
         <AnimatePresence initial={false}>
           {messages.map(
             (message: Message) =>
-              message.content && (
+              message.content && message.content.trim() !== "" && (
                 <MessageItem
                   key={message.id}
                   message={message}
