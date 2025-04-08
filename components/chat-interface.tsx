@@ -2,9 +2,9 @@
 
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { useChat } from "ai/react";
+import { useChat, type Message } from "ai/react";
 import { useRef, useEffect, useState } from "react";
-import { Moon, Send, Sun, X } from "lucide-react";
+import { Moon, Send, Sun, X, Settings } from "lucide-react";
 import { useTheme } from "next-themes";
 import MessageContainer from "./message-container";
 import {
@@ -16,6 +16,7 @@ import ChatInput from "./chat-input";
 import { ImperativePanelHandle } from "react-resizable-panels";
 import { useMediaQuery } from 'react-responsive';
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerDescription, DrawerFooter } from '@/components/ui/drawer';
+import SettingsDialog from "./settings-dialog";
 
 const ThemeChanger = () => {
   const [mounted, setMounted] = useState(false);
@@ -51,18 +52,36 @@ export default function ChatInterface() {
   const [documentMap, setDocumentMap] = useState<Record<string, string>>({});
   const [currentCitation, setCurrentCitation] = useState<string | null>(null);
   const [isCitationShown, setIsCitationShown] = useState(false);
-  const { messages, input, handleInputChange, handleSubmit, isLoading } =
-    useChat({
-      maxToolRoundtrips: 4,
-      onToolCall({ toolCall }: { toolCall: { toolName: string } }) {
-        setToolCall(toolCall.toolName);
-      },
-      onError: (error: any) => {
-        console.error("API Error:", error); // Log the error
-        const errorMessage = error.message ? JSON.parse(error.message)?.error : "An unexpected error occurred.";
-        setError(errorMessage);
-      },
-    });
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const { 
+    messages, 
+    input, 
+    handleInputChange, 
+    handleSubmit, 
+    isLoading, 
+    data
+  } = useChat({
+    onError: (error: any) => {
+      console.error("API Error:", error); // Log the error
+      let errorMessage = "An unexpected error occurred.";
+      
+      try {
+        if (error.message) {
+          // Try to parse the error message if it's JSON
+          const parsedError = JSON.parse(error.message);
+          errorMessage = parsedError?.error || errorMessage;
+        } else if (error.toString) {
+          // Fallback to toString
+          errorMessage = error.toString();
+        }
+      } catch (parseError) {
+        // If JSON parsing fails, use the raw message
+        errorMessage = error.message || errorMessage;
+      }
+      
+      setError(errorMessage);
+    },
+  });
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const citationPanelRef = useRef<ImperativePanelHandle>(null);
 
@@ -75,31 +94,42 @@ export default function ChatInterface() {
     }
   }, [currentCitation]);
 
-  // Function to extract document IDs and maintain the mapping
-  const extractAndMapDocuments = (messages: Array<any>) => {
-    const newDocumentMap: Record<string, string> = {};
+  // Process source documents from the data stream
+  useEffect(() => {
+    if (data && Array.isArray(data)) {
+      console.log("Processing data stream:", JSON.stringify(data));
+      const newDocumentMap: Record<string, string> = {};
+      let foundDocs = false;
 
-    messages.forEach((message: { role: string; toolInvocations?: Array<{ result?: Array<{ id: string; text: string }> }> }) => {
-      if (message.role === "assistant" && message.toolInvocations) {
-        message.toolInvocations.forEach((invocation: { result?: Array<{ id: string; text: string }> }) => {
-          if (invocation.result) {
-            invocation.result.forEach((item: { id: string; text: string }) => {
-              if (typeof item === 'object' && item.id) {
-                newDocumentMap[item.id] = item.text; // Assuming item has a `text` field
-              }
-            });
-          }
+      // Iterate through all data entries and accumulate sourceDocuments
+      data.forEach(item => {
+        if (typeof item === 'object' && item !== null && item.hasOwnProperty('sourceDocuments') && Array.isArray(item.sourceDocuments)) {
+          (item.sourceDocuments as any[]).forEach((doc: any) => {
+            if (doc && doc.id && doc.text) {
+              newDocumentMap[doc.id] = doc.text;
+              foundDocs = true;
+            }
+          });
+        }
+      });
+
+      if (foundDocs) {
+        console.log("Updating documentMap from accumulated data stream entries:", newDocumentMap);
+        // Use functional update to ensure we have the latest state
+        setDocumentMap(prevMap => {
+          const updatedMap = { ...prevMap, ...newDocumentMap };
+          console.log('Document map state AFTER update:', updatedMap);
+          return updatedMap;
         });
+      } else {
+        console.log("No sourceDocuments found in any data stream entries.");
       }
-    });
+    }
+  }, [data]);
 
-    setDocumentMap(prevMap => ({ ...prevMap, ...newDocumentMap }));
-  };
-
-  // Auto scroll to bottom when new messages arrive and extract documents
+  // Auto scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    extractAndMapDocuments(messages);
   }, [messages]);
 
   const handleSubmitWithErrorReset = (event: React.FormEvent) => {
@@ -124,7 +154,13 @@ export default function ChatInterface() {
         <ResizablePanel id="chat-panel">
           <div className="flex flex-col min-w-0 h-screen bg-background">
             <div className="flex flex-row justify-between items-center p-4">
-              <ThemeChanger />
+              <div className="flex items-center space-x-4">
+                <ThemeChanger />
+                <Button variant="ghost" size="icon" onClick={() => setIsSettingsOpen(true)}>
+                  <Settings className="h-[1.2rem] w-[1.2rem]" />
+                  <span className="sr-only">Settings</span>
+                </Button>
+              </div>
               <a
                 href="https://github.com/Azure-Samples/azure-ai-vercel-rag-starter"
                 className="text-sm text-muted-foreground hover:text-primary transition-colors duration-200"
@@ -198,6 +234,9 @@ export default function ChatInterface() {
           </DrawerFooter>
         </DrawerContent>
       </Drawer>
+
+      <SettingsDialog isOpen={isSettingsOpen} onOpenChange={setIsSettingsOpen} />
+
     </>
   );
 }
