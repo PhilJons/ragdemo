@@ -217,7 +217,11 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onOpenChange })
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent 
-        className="w-full max-w-xl bg-background shadow-lg overflow-hidden p-8 rounded-3xl [--radius:1.5rem]"
+        className="w-full max-w-xl bg-background shadow-lg overflow-hidden" 
+        style={{ 
+          borderRadius: '1.5rem',
+          padding: '2rem'
+        }}
       >
         <div className="space-y-6">
           <div className="text-center space-y-1">
@@ -254,10 +258,15 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onOpenChange })
 
           {selectedFile && (
             <div className="p-3 border rounded-lg flex items-center justify-between space-x-3">
-              <div className="flex items-center space-x-3 overflow-hidden">
+              <div className="flex items-center space-x-3 flex-grow min-w-0 overflow-hidden">
                 <FileText className="w-5 h-5 text-muted-foreground flex-shrink-0" />
-                <div className="flex-grow min-w-0">
-                  <p className="text-sm font-medium truncate">{selectedFile.name}</p>
+                <div className="min-w-0">
+                  <p 
+                    className="text-sm font-medium"
+                    title={selectedFile.name}
+                  >
+                    {selectedFile.name}
+                  </p>
                   {isUploading ? (
                      <Progress value={simulatedProgress} className="h-1 mt-1" />
                   ) : (
@@ -311,7 +320,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onOpenChange })
                       variants={itemVariants}
                     >
                        <FileText className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-                       <span className="flex-grow truncate" title={source.name}>{source.name}</span>
+                       <span className="flex-grow" title={source.name}>{source.name}</span>
                       <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}>
                         <Button 
                           variant="ghost" 
