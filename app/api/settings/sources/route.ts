@@ -122,8 +122,15 @@ export async function POST(request: Request) {
     console.log(`Generated SAS URL for DI (valid for 15 mins)`);
     
     // --- Step 2: Extract Content using Document Intelligence ---
-    if (file.type === 'application/pdf') { 
-      console.log(`Analyzing document with Document Intelligence using SAS URL...`);
+    const supportedDocIntelligenceTypes = [
+      'application/pdf',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation', // Added PPTX
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // Added DOCX (optional)
+      // Add other image types if needed: 'image/jpeg', 'image/png', 'image/tiff', 'image/bmp'
+    ];
+
+    if (supportedDocIntelligenceTypes.includes(file.type)) { 
+      console.log(`Analyzing document type ${file.type} with Document Intelligence: ${blockBlobClient.url}`);
       const poller = await documentAnalysisClient.beginAnalyzeDocumentFromUrl(
         "prebuilt-read", 
         blobUrlWithSas // Use the SAS URL
