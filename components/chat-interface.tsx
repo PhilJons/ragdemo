@@ -103,7 +103,7 @@ export default function ChatInterface() {
 
       // Iterate through all data entries and accumulate sourceDocuments
       data.forEach(item => {
-        if (typeof item === 'object' && item !== null && item.hasOwnProperty('sourceDocuments') && Array.isArray(item.sourceDocuments)) {
+        if (typeof item === 'object' && item !== null && !Array.isArray(item) && item.hasOwnProperty('sourceDocuments') && Array.isArray(item.sourceDocuments)) {
           (item.sourceDocuments as any[]).forEach((doc: any) => {
             if (doc && doc.id && doc.text) {
               newDocumentMap[doc.id] = doc.text;

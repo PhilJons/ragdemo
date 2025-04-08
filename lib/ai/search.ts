@@ -70,8 +70,12 @@ export const findRelevantContent = async (userQuery: string) => {
         embeddingCache.set(userQuery, userQueryEmbedded);
         if (embeddingCache.size > MAX_CACHE_SIZE) {
           const oldestKey = embeddingCache.keys().next().value;
-          embeddingCache.delete(oldestKey);
-          console.log("Cache size limit reached, removed oldest entry.");
+          if (oldestKey !== undefined) {
+            embeddingCache.delete(oldestKey);
+            console.log("Cache size limit reached, removed oldest entry:", oldestKey);
+          } else {
+            console.warn("Attempted to prune cache, but oldestKey was undefined despite cache size exceeding limit.");
+          }
         }
       }
 
