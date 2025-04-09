@@ -6,52 +6,6 @@ import { Loader2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-// Custom components for Markdown rendering
-const MarkdownComponents = {
-  // Handle links properly
-  a: (props: any) => (
-    <a 
-      {...props} 
-      target="_blank" 
-      rel="noopener noreferrer" 
-      className="text-blue-600 dark:text-blue-400 hover:underline"
-    />
-  ),
-  // Style code blocks
-  code: ({ node, inline, className, children, ...props }: any) => {
-    const match = /language-(\w+)/.exec(className || "");
-    return !inline && match ? (
-      <pre className="p-2 rounded bg-gray-100 dark:bg-gray-800 overflow-x-auto">
-        <code className={className} {...props}>
-          {children}
-        </code>
-      </pre>
-    ) : (
-      <code
-        className={
-          inline
-            ? "px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-sm"
-            : "block p-2 rounded bg-gray-100 dark:bg-gray-800 overflow-x-auto"
-        }
-        {...props}
-      >
-        {children}
-      </code>
-    );
-  },
-  // Style blockquotes
-  blockquote: (props: any) => (
-    <blockquote
-      className="pl-4 border-l-4 border-gray-300 dark:border-gray-700 italic"
-      {...props}
-    />
-  ),
-  // Fix spacing in paragraphs
-  p: (props: any) => (
-    <p className="my-1" {...props} />
-  ),
-};
-
 interface MessageContainerProps {
   messages: Message[];
   error: string | null;
@@ -61,32 +15,70 @@ interface MessageContainerProps {
   messagesEndRef: React.RefObject<HTMLDivElement>;
 }
 
+// Custom components for Markdown rendering using standard Tailwind
+const MarkdownComponents = {
+  a: (props: any) => (
+    <a {...props} target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-white hover:underline citation" style={{ color: 'var(--link-color, white) !important' }} />
+  ),
+  p: (props: any) => <p className="mb-4" style={{ color: 'inherit' }} {...props} />,
+  ul: (props: any) => <ul className="list-disc pl-5 my-2" style={{ color: 'inherit' }} {...props} />,
+  ol: (props: any) => <ol className="list-decimal pl-5 my-2" style={{ color: 'inherit' }} {...props} />,
+  li: (props: any) => <li className="my-1" style={{ color: 'inherit' }} {...props} />,
+  blockquote: (props: any) => (
+    <blockquote className="pl-4 border-l-4 border-gray-300 dark:border-gray-600 italic my-3 text-muted-foreground" style={{ color: 'inherit' }} {...props} />
+  ),
+  strong: (props: any) => (
+    <strong className="font-semibold text-gray-900 dark:text-white" style={{ color: 'white !important', fontWeight: '500' }} {...props} />
+  ),
+  em: (props: any) => (
+    <em className="italic text-gray-900 dark:text-white" style={{ color: 'white !important' }} {...props} />
+  ),
+  code: ({ node, inline, className, children, ...props }: any) => {
+    const match = /language-(\w+)/.exec(className || "");
+    if (!inline && match) {
+      return (
+        <pre className="p-2 rounded bg-gray-100 dark:bg-gray-800 overflow-x-auto my-3" style={{ color: 'inherit' }}>
+          <code className={className} {...props} style={{ color: 'inherit' }}>{children}</code>
+        </pre>
+      );
+    }
+    return (
+      <code
+        className={inline ? "px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-sm" : "block p-2 rounded bg-gray-100 dark:bg-gray-800 overflow-x-auto"}
+        {...props}
+        style={{ color: 'inherit' }}
+      >
+        {children}
+      </code>
+    );
+  },
+};
+
 const MessageItem: React.FC<{
   message: Message;
   showCitation: (id: string) => void;
 }> = React.memo(
   ({ message, showCitation }) => {
     const replaceCitationFlags = (response: string): JSX.Element => {
-      // If no citations, just render the whole text as markdown
       if (!response.includes("[Source:")) {
         return (
-          <ReactMarkdown 
-            remarkPlugins={[remarkGfm]}
-            components={MarkdownComponents}
-          >
-            {response}
-          </ReactMarkdown>
+          <div className="text-foreground dark:text-gray-100 [&_a]:!text-blue-600 [&_a]:!dark:text-white [&_strong]:!text-gray-900 [&_strong]:!dark:text-white [&_em]:!text-gray-900 [&_em]:!dark:text-white" style={{ color: 'inherit' }}>
+            <style>{`
+              [data-theme='dark'] a, .dark a { color: white !important; }
+              [data-theme='dark'] strong, .dark strong { color: white !important; }
+            `}</style>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>
+              {response}
+            </ReactMarkdown>
+          </div>
         );
       }
 
-      // Simple split approach that preserves text spacing
       const segments = response.split(/(\[Source: [^\]]+\])/g);
       const citationRegex = /\[Source: ([^\]]+)\]/;
-      
-      // Map citation IDs to numbers for consistent referencing
       const citationMapping: Record<string, number> = {};
       let citationIndex = 1;
-      
+
       segments.forEach(segment => {
         const match = segment.match(citationRegex);
         if (match && match[1]) {
@@ -96,38 +88,31 @@ const MessageItem: React.FC<{
           }
         }
       });
-      
-      // Render segments with citations as buttons
+
       return (
-        <div className="prose prose-sm dark:prose-invert max-w-none">
+        <div className="prose prose-sm max-w-none text-foreground dark:text-gray-100 [&_a]:!text-blue-600 [&_a]:!dark:text-white [&_strong]:!text-gray-900 [&_strong]:!dark:text-white [&_em]:!text-gray-900 [&_em]:!dark:text-white">
           {segments.map((segment, index) => {
             const match = segment.match(citationRegex);
-            
             if (match && match[1]) {
-              // This is a citation
               const citationId = match[1];
               return (
                 <button
                   key={`citation-${index}`}
                   onClick={() => showCitation(citationId)}
-                  className="inline text-muted-foreground hover:text-primary"
+                  className="inline underline text-blue-600 dark:text-white hover:text-primary dark:hover:text-gray-300 citation"
+                  style={{ fontWeight: 'bold' }}
                 >
-                  <span className="underline">[{citationMapping[citationId]}]</span>
+                  <span>[{citationMapping[citationId]}]</span>
                 </button>
               );
-            } else {
-              // This is regular text
-              return (
-                <span key={`text-${index}`} className="inline">
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    components={MarkdownComponents}
-                  >
-                    {segment}
-                  </ReactMarkdown>
-                </span>
-              );
             }
+            return (
+              <span key={`text-${index}`} className="inline [&_a]:!text-blue-600 [&_a]:!dark:text-white [&_strong]:!text-gray-900 [&_strong]:!dark:text-white [&_em]:!text-gray-900 [&_em]:!dark:text-white">
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>
+                  {segment}
+                </ReactMarkdown>
+              </span>
+            );
           })}
         </div>
       );
@@ -144,24 +129,18 @@ const MessageItem: React.FC<{
         }`}
       >
         <div
-          className={`rounded-lg px-4 py-2 max-w-[85%] ${
+          className={`rounded-lg px-4 py-2 max-w-[85%] ${ // Use standard Tailwind classes
             message.role === "user"
               ? "bg-primary text-primary-foreground"
-              : "bg-muted"
+              : "bg-muted text-foreground dark:bg-gray-800 dark:text-gray-100"
           }`}
         >
-          <div 
-            className={message.role === "assistant" 
-              ? "prose prose-sm dark:prose-invert max-w-none" 
-              : "whitespace-pre-wrap text-primary-foreground"
-            }
-          >
-            {message.role === "assistant" ? (
-              replaceCitationFlags(message.content)
-            ) : (
-              <span>{message.content}</span>
-            )}
-          </div>
+          {/* Render content directly, inheriting text color from parent */} 
+          {message.role === "assistant" ? (
+            replaceCitationFlags(message.content)
+          ) : (
+            <span>{message.content}</span>
+          )}
         </div>
       </motion.div>
     );
@@ -171,7 +150,6 @@ const MessageItem: React.FC<{
 
 MessageItem.displayName = "MessageItem";
 
-// Use React.memo to prevent unnecessary re-renders
 const MessageContainer: React.FC<MessageContainerProps> = React.memo(
   ({ messages, error, toolCall, isLoading, showCitation, messagesEndRef }) => {
     return (
@@ -214,7 +192,7 @@ const MessageContainer: React.FC<MessageContainerProps> = React.memo(
             animate={{ opacity: 1, y: 0 }}
             className="flex justify-center"
           >
-            <div className="flex items-center gap-2 rounded-lg px-4 py-2 bg-muted">
+            <div className="flex items-center gap-2 rounded-lg px-4 py-2 bg-muted dark:bg-gray-800 text-foreground dark:text-gray-100">
               <Loader2 className="h-4 w-4 animate-spin" />
               <span>
                 {toolCall === "getInformation"

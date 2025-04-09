@@ -226,7 +226,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onOpenChange })
         <div className="space-y-6">
           <div className="text-center space-y-1">
              <h2 className="text-2xl font-semibold tracking-tight">Manage Context Sources</h2>
-             <p className="text-sm text-muted-foreground">
+             <p className="text-sm text-foreground">
                 Upload new files or remove existing sources used for chat context.
              </p>
           </div>
@@ -242,11 +242,11 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onOpenChange })
             onDrop={handleDrop}
             onClick={() => fileInputRef.current?.click()}
           >
-            <UploadCloud className={cn("w-10 h-10 mb-3 text-muted-foreground", isDragging && "text-primary")} />
-            <p className="mb-2 text-sm text-muted-foreground">
+            <UploadCloud className={cn("w-10 h-10 mb-3 text-primary", isDragging && "text-primary")} />
+            <p className="mb-2 text-sm text-foreground">
               <span className="font-semibold">Drop your files here</span> or browse
             </p>
-            <p className="text-xs text-muted-foreground">Max file size up to 1GB</p>
+            <p className="text-xs text-foreground">Max file size up to 1GB</p>
             <Input 
               ref={fileInputRef} 
               id="context-file-hidden" 
@@ -259,7 +259,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onOpenChange })
           {selectedFile && (
             <div className="p-3 border rounded-lg flex items-center justify-between space-x-3">
               <div className="flex items-center space-x-3 flex-grow min-w-0 overflow-hidden">
-                <FileText className="w-5 h-5 text-muted-foreground flex-shrink-0" />
+                <FileText className="w-5 h-5 text-primary flex-shrink-0" />
                 <div className="min-w-0">
                   <p 
                     className="text-sm font-medium"
@@ -270,14 +270,14 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onOpenChange })
                   {isUploading ? (
                      <Progress value={simulatedProgress} className="h-1 mt-1" />
                   ) : (
-                    <p className="text-xs text-muted-foreground">{(selectedFile.size / (1024*1024)).toFixed(2)} MB</p>
+                    <p className="text-xs text-foreground">{(selectedFile.size / (1024*1024)).toFixed(2)} MB</p>
                   )}
                 </div>
               </div>
               <Button 
                   variant="ghost" 
                   size="icon" 
-                  className="h-6 w-6 text-muted-foreground hover:text-destructive flex-shrink-0" 
+                  className="h-6 w-6 text-foreground hover:text-destructive flex-shrink-0" 
                   onClick={() => handleFileSelect(null)}
                   aria-label={`Remove ${selectedFile.name}`}
               >
@@ -319,13 +319,13 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onOpenChange })
                       className="flex justify-between items-center text-sm p-3 border rounded-lg space-x-2"
                       variants={itemVariants}
                     >
-                       <FileText className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-                       <span className="flex-grow" title={source.name}>{source.name}</span>
+                       <FileText className="w-4 h-4 text-primary flex-shrink-0" />
+                       <span className="flex-grow text-foreground" title={source.name}>{source.name}</span>
                       <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}>
                         <Button 
                           variant="ghost" 
                           size="icon" 
-                          className="h-6 w-6 text-muted-foreground hover:text-destructive flex-shrink-0" 
+                          className="h-6 w-6 text-foreground hover:text-destructive flex-shrink-0" 
                           onClick={() => handleDelete(source.id)}
                           aria-label={`Delete ${source.name}`}
                         >
@@ -339,7 +339,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onOpenChange })
             </div>
           )}
           {isLoadingSources && (
-              <p className="text-sm text-muted-foreground text-center py-4">Loading sources...</p>
+              <p className="text-sm text-foreground text-center py-4">Loading sources...</p>
             )}
           {sourcesError && (
               <p className="text-sm text-red-600 text-center py-4">Error loading sources: {sourcesError}</p>
