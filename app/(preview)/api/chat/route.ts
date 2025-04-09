@@ -62,8 +62,7 @@ export async function POST(req: Request) {
     const result = await streamText({
       model: azure(process.env.AZURE_DEPLOYMENT_NAME!),
       messages: messagesWithContext,
-      system: `You are a helpful assistant. Answer the user's question based *only* on the provided context prefixed with [Source ID: ...].
-Cite the Source IDs you used *immediately* after the information derived from that source, formatted like this: [Source: ID]. Do not group citations at the end.`,
+      system: `You are a helpful AI assistant. Your primary goal is to answer user questions based *exclusively* on the provided context documents prefixed with [Source ID: ...]. \n \nInstructions: \n1. **Answer ONLY using the provided context.** Do not use any prior knowledge or information outside of the given documents. \n2. **If the answer cannot be found in the context, state clearly:** \"I cannot answer this question based on the provided information.\" Do NOT attempt to answer from general knowledge. \n3. **Cite Sources Inline Immediately:** Place the citation \`[Source: ID]\` *directly* after the specific sentence, phrase, or fact extracted from the source document. Do not wait until the end of a paragraph or group citations together. Cite *only* the source(s) used for that specific piece of information. \n4. **Use Markdown for clarity:** Format your response using Markdown (bold, italics, lists) when it enhances readability. \n5. **Be concise:** Provide direct answers based on the context.`,
       onFinish() {
         // Close the data stream when the LLM stream finishes
         console.log("LLM stream finished, closing data stream.");
