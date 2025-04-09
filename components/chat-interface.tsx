@@ -29,16 +29,15 @@ const MarkdownComponents = {
       target="_blank" 
       rel="noopener noreferrer" 
       className="text-blue-600 dark:text-blue-400 hover:underline"
+      style={{ color: 'inherit' }}
     />
   ),
   // Style code blocks
   code: ({ node, inline, className, children, ...props }: any) => {
     const match = /language-(\w+)/.exec(className || "");
     return !inline && match ? (
-      <pre className="p-2 rounded bg-gray-100 dark:bg-gray-800 overflow-x-auto">
-        <code className={className} {...props}>
-          {children}
-        </code>
+      <pre className="p-2 rounded bg-gray-100 dark:bg-gray-800 overflow-x-auto" style={{ color: 'inherit' }}>
+        <code className={className} {...props} style={{ color: 'inherit' }}>{children}</code>
       </pre>
     ) : (
       <code
@@ -48,6 +47,7 @@ const MarkdownComponents = {
             : "block p-2 rounded bg-gray-100 dark:bg-gray-800 overflow-x-auto"
         }
         {...props}
+        style={{ color: 'inherit' }}
       >
         {children}
       </code>
@@ -56,7 +56,8 @@ const MarkdownComponents = {
   // Style blockquotes
   blockquote: (props: any) => (
     <blockquote
-      className="pl-4 border-l-4 border-gray-300 dark:border-gray-700 italic"
+      className="pl-4 border-l-4 border-gray-300 dark:border-gray-500 italic text-gray-800 dark:text-gray-100"
+      style={{ color: 'inherit' }}
       {...props}
     />
   ),
@@ -67,10 +68,38 @@ const MarkdownComponents = {
     </div>
   ),
   th: (props: any) => (
-    <th className="bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 px-4 py-2 text-left" {...props} />
+    // Keep light background and dark text always for headers
+    <th className="bg-gray-100 text-gray-900 border border-gray-300 dark:border-gray-600 px-4 py-2 text-left font-semibold" {...props} />
   ),
   td: (props: any) => (
-    <td className="border border-gray-300 dark:border-gray-700 px-4 py-2" {...props} />
+    // Ensure proper contrast in both light and dark modes
+    <td 
+      className="border border-gray-300 dark:border-gray-600 px-4 py-2 text-gray-900 dark:text-white" 
+      style={{ color: 'inherit' }} 
+      {...props} 
+    />
+  ),
+  // Add paragraph styling
+  p: (props: any) => <p style={{ color: 'inherit' }} {...props} />,
+  // Add heading styling
+  h1: (props: any) => (
+    <h1 className="font-bold text-xl mt-6 mb-4" style={{ color: 'inherit' }} {...props} />
+  ),
+  h2: (props: any) => (
+    <h2 className="font-bold text-lg mt-5 mb-3" style={{ color: 'inherit' }} {...props} />
+  ),
+  h3: (props: any) => (
+    <h3 className="font-bold text-md mt-4 mb-2" style={{ color: 'inherit' }} {...props} />
+  ),
+  // Add list styling
+  ul: (props: any) => (
+    <ul className="list-disc pl-5 my-2" style={{ color: 'inherit' }} {...props} />
+  ),
+  ol: (props: any) => (
+    <ol className="list-decimal pl-5 my-2" style={{ color: 'inherit' }} {...props} />
+  ),
+  li: (props: any) => (
+    <li className="my-1" style={{ color: 'inherit' }} {...props} />
   ),
 };
 
@@ -574,20 +603,11 @@ export default function ChatInterface() {
                   <span className="sr-only">Settings</span>
                 </Button>
               </div>
-              <a
-                href="https://github.com/Azure-Samples/azure-ai-vercel-rag-starter"
-                className="text-sm text-muted-foreground hover:text-primary transition-colors duration-200"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Source Code
-              </a>
             </div>
             <div className="text-center mb-4 md:mb-8">
-              <h1 className="text-2xl font-bold mb-2">AI Chat</h1>
+              <h1 className="text-2xl font-bold mb-2">Secure RAG Demo</h1>
               <p className="text-sm text-muted-foreground">
-                A minimal RAG chat application built with Azure AI Search, Azure
-                OpenAI, and the Vercel AI SDK
+                Explore Retrieval-Augmented Generation hosted securely on Azure. Manage data sources via the Settings panel (⚙️) in the top left.
               </p>
             </div>
 
@@ -622,14 +642,14 @@ export default function ChatInterface() {
               </button>
             </div>
             <div className="p-4">
-              {currentCitation ? (  
-                <div className="prose prose-sm max-w-none dark:prose-invert prose-table:border-collapse prose-td:border prose-td:border-gray-300 dark:prose-td:border-gray-700 prose-th:border prose-th:border-gray-300 dark:prose-th:border-gray-700 prose-th:bg-gray-100 dark:prose-th:bg-gray-800 prose-th:p-2 prose-td:p-2">
+              {currentCitation ? (
+                <div className="prose prose-sm max-w-none text-foreground dark:text-gray-100">
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>
                     {formatCitationAsMarkdown(currentCitation)}
                   </ReactMarkdown>
                 </div>
               ) : (
-                <p>Select a citation to view details</p>
+                <p className="text-foreground dark:text-gray-100">Select a citation to view details</p>
               )}
             </div>
           </ResizablePanel>
@@ -642,13 +662,13 @@ export default function ChatInterface() {
             <DrawerTitle>Citation Details</DrawerTitle>
             <DrawerDescription className="h-[50vh] overflow-y-auto">
               {currentCitation ? (
-                <div className="prose prose-sm max-w-none dark:prose-invert prose-table:border-collapse prose-td:border prose-td:border-gray-300 dark:prose-td:border-gray-700 prose-th:border prose-th:border-gray-300 dark:prose-th:border-gray-700 prose-th:bg-gray-100 dark:prose-th:bg-gray-800 prose-th:p-2 prose-td:p-2">
+                <div className="prose prose-sm max-w-none text-foreground dark:text-gray-100">
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>
                     {formatCitationAsMarkdown(currentCitation)}
                   </ReactMarkdown>
                 </div>
               ) : (
-                "No citation selected."
+                <span className="text-foreground dark:text-gray-100">No citation selected.</span>
               )}
             </DrawerDescription>
           </DrawerHeader>

@@ -64,14 +64,43 @@
         --input: 0 0% 14.9%;
         --ring: 0 0% 83.1%;
     }
-}
 
-@layer base {
     * {
         @apply border-border;
     }
     body {
         @apply bg-background text-foreground;
+    }
+    
+    /* Custom overrides for dark mode prose table */
+    .dark .prose th {
+      @apply bg-gray-100 text-gray-900; /* Force light header bg, dark text */
+    }
+    .dark .prose td,
+    .dark .prose tr {
+      @apply text-gray-100; /* Force light text for cells */
+    }
+
+    /* Make all links white in dark mode with higher specificity */
+    [data-theme='dark'] a,
+    .dark a,
+    html[data-theme='dark'] a,
+    html[data-theme='dark'] body a,
+    html[data-theme='dark'] div a,
+    html[data-theme='dark'] span a {
+      @apply text-white hover:text-gray-300 !important;
+      color: white !important;
+    }
+    
+    /* Force bold text to use white in dark mode with higher specificity */
+    [data-theme='dark'] strong,
+    .dark strong,
+    html[data-theme='dark'] strong,
+    html[data-theme='dark'] body strong,
+    html[data-theme='dark'] div strong,
+    html[data-theme='dark'] span strong {
+      @apply text-white !important;
+      color: white !important;
     }
 }
 
