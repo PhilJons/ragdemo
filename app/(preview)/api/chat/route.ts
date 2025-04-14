@@ -39,6 +39,10 @@ export async function POST(req: Request) {
           validResults.forEach((result, index) => {
             retrievedContext += `[Source ID: ${result.id}] ${result.text}\n`;
           });
+          
+          // TEMP FIX: Remove potentially problematic phrase flagged by Azure Content Filter
+          retrievedContext = retrievedContext.replace(/Stop working the way you always have! Challenge every step!/g, '');
+          
           console.log("Context prepared (with IDs):", retrievedContext);
           
           // Append the correctly structured sourceDocuments to the stream data
@@ -54,15 +58,55 @@ export async function POST(req: Request) {
       console.log("No user message found to fetch context for.");
     }
     
-    const messagesWithContext: CoreMessage[] = retrievedContext
-      ? [{ role: 'system', content: retrievedContext }, ...messages]
-      : messages;
+    // --- Modified Context Injection ---
+    const messagesWithContext = [...messages]; // Create a copy
+    if (retrievedContext && lastUserMessage) {
+        const lastUserMessageIndex = messagesWithContext.findLastIndex(m => m.role === 'user');
+        if (lastUserMessageIndex !== -1 && typeof messagesWithContext[lastUserMessageIndex].content === 'string') {
+            // Directly modify the content property of the object in the copied array
+            messagesWithContext[lastUserMessageIndex].content = `${messagesWithContext[lastUserMessageIndex].content}\n\n${retrievedContext}`;
+            console.log("Appended context to the last user message.");
+        } else {
+             console.warn("Could not find last user message or its content is not a string to append context.");
+             // Fallback: Prepend as a system message if appending fails, though less ideal
+             messagesWithContext.unshift({ role: 'system', content: retrievedContext });
+        }
+    }
+    // --- End Modified Context Injection ---
     // --- End Manual RAG Context Injection ---
 
     const result = await streamText({
       model: azure(process.env.AZURE_DEPLOYMENT_NAME!),
-      messages: messagesWithContext,
-      system: `You are a helpful AI assistant. Your primary goal is to answer user questions based *exclusively* on the provided context documents prefixed with [Source ID: ...]. \n \nInstructions: \n1. **Answer ONLY using the provided context.** Do not use any prior knowledge or information outside of the given documents. \n2. **If the answer cannot be found in the context, state clearly:** \"I cannot answer this question based on the provided information.\" Do NOT attempt to answer from general knowledge. \n3. **Cite Sources Inline Immediately:** Place the citation \`[Source: ID]\` *directly* after the specific sentence, phrase, or fact extracted from the source document. Do not wait until the end of a paragraph or group citations together. Cite *only* the source(s) used for that specific piece of information. \n4. **Use Markdown for clarity:** Format your response using Markdown (bold, italics, lists) when it enhances readability. \n5. **Be concise:** Provide direct answers based on the context.`,
+      messages: messagesWithContext, // Use the potentially modified messages array
+      system: `You are an insightful and accurate AI assistant whose primary responsibility is to generate nuanced, context-rich responses based exclusively on provided context documents (RAG). Your task is to interpret and synthesize information from these documents.
+
+Instructions:
+
+Contextual Accuracy:
+
+Respond exclusively based on the provided context documents, typically marked with [Source ID: ...].
+
+Never reference or rely on external knowledge outside the provided context.
+
+Nuanced and Insightful Answers:
+
+Provide nuanced responses by synthesizing relevant information from the documents.
+
+Explicit Source Referencing:
+
+Always explicitly cite your sources inline immediately after each referenced piece of information using the format [Source ID: ID].
+
+When synthesizing across multiple documents, clearly attribute each piece of information to the correct source ID.
+
+Avoiding Hallucinations:
+
+If the provided context does not contain sufficient information to reliably answer a query, explicitly state: "I cannot answer this question based on the provided information."
+
+Formatting and Clarity:
+
+Structure your responses clearly using Markdown (bold, italics, bullet points, numbered lists) to enhance readability.
+
+Be concise yet thorough—clearly communicate your interpretation of the source materials without unnecessary filler.`, // Simplified prompt, removed file naming convention, adjusted citation format
       onFinish() {
         // Close the data stream when the LLM stream finishes
         console.log("LLM stream finished, closing data stream.");
