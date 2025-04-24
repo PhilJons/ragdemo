@@ -14,9 +14,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { Trash2, UploadCloud, FileText, X } from 'lucide-react';
+import { Trash2, UploadCloud, FileText, X, Info, ChevronDown } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { Progress } from "@/components/ui/progress";
+import { AnimatePresence } from 'framer-motion';
 import { cn } from "@/lib/utils";
 
 interface SettingsDialogProps {
@@ -28,6 +29,17 @@ interface SourceDocument {
   id: string;
   name: string;
 }
+
+// Animation variants for Framer Motion
+const contentVariants = {
+  collapsed: { height: 0, opacity: 0, marginTop: 0 },
+  expanded: { 
+    height: "auto", 
+    opacity: 1, 
+    marginTop: "0.75rem", // Equivalent to mt-3
+    transition: { duration: 0.3, ease: [0.04, 0.62, 0.23, 0.98] }
+  }
+};
 
 const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onOpenChange }) => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -41,6 +53,9 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onOpenChange })
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [simulatedProgress, setSimulatedProgress] = useState(0);
+
+  // State for expandable info section
+  const [isInfoExpanded, setIsInfoExpanded] = useState(false);
 
   const fetchSources = useCallback(async () => {
     setIsLoadingSources(true);
@@ -224,11 +239,59 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onOpenChange })
         }}
       >
         <div className="space-y-6">
-          <div className="text-center space-y-1">
-             <h2 className="text-2xl font-semibold tracking-tight">Manage Context Sources</h2>
-             <p className="text-sm text-foreground">
-                Upload new files or remove existing sources used for chat context.
-             </p>
+          <div className="text-center space-y-3">
+            <h2 className="text-2xl font-semibold tracking-tight">Manage Context Sources</h2>
+            <p className="text-sm text-foreground">Upload new files or remove existing sources used for chat context.</p>
+
+            {/* Expandable Info Section */}
+            <div className="mx-auto w-full max-w-md">
+              <button
+                onClick={() => setIsInfoExpanded(!isInfoExpanded)}
+                className="flex w-full items-center justify-between rounded-lg border bg-muted/40 px-4 py-3 text-left text-sm font-medium transition-colors hover:bg-muted/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                aria-expanded={isInfoExpanded}
+              >
+                <div className="flex items-center gap-2">
+                  <Info className="h-4 w-4 text-muted-foreground" />
+                  <span>Recommended File-Naming Schema</span>
+                </div>
+                <ChevronDown
+                  className={cn(
+                    "h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200",
+                    isInfoExpanded && "rotate-180"
+                  )}
+                />
+              </button>
+
+              <AnimatePresence initial={false}>
+                {isInfoExpanded && (
+                  <motion.div
+                    key="content"
+                    initial="collapsed"
+                    animate="expanded"
+                    exit="collapsed"
+                    variants={contentVariants}
+                    className="overflow-hidden text-left text-sm"
+                  >
+                    <div className="rounded-b-lg border border-t-0 bg-muted/40 p-4 pt-3">
+                      <pre className="whitespace-pre-wrap text-xs leading-5 font-mono bg-background/60 rounded-md p-2 mb-3 border">
+{`<origin>-<topic>-<yyyy-mm[-dd]>[-<doc-type>][-v<version>].<ext>`}
+                      </pre>
+                      <ul className="list-disc pl-5 text-xs space-y-1 mb-3">
+                        <li><b>origin</b>: internal | external | client | competitor-name</li>
+                        <li><b>topic</b>: strategy | market-analysis | campaign-review | project-update …</li>
+                        <li><b>date</b>: YYYY-MM or YYYY-MM-DD</li>
+                        <li><b>version</b> (optional): v1, v2-final …</li>
+                      </ul>
+                      <p className="font-semibold text-xs mb-1">Examples</p>
+                      <code className="block text-xs mb-0.5">internal-strategy-2024-03-report-v2.md</code>
+                      <code className="block text-xs mb-0.5">competitor-tesla-strategy-2023-q4.pdf</code>
+                      <code className="block text-xs mb-0.5">market-trends-2024-05-summary.docx</code>
+                      <code className="block text-xs">client-acme-project-update-2024-01-15.pptx</code>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
           <Separator />
           <div 
