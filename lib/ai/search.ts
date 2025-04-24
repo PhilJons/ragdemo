@@ -97,7 +97,13 @@ export const findRelevantContent = async (userQuery: string) => {
       };
     }
 
-    // Perform the search
+    // Expand search scope to include metadata fields like title and sourcefile so that
+    // queries referencing specific file names or document titles can be matched even
+    // when the user does not use the exact content text. This requires those fields
+    // to be marked as searchable in your Azure AI Search index definition.
+
+    searchOptions.searchFields = [contentColumn, "title", sourcefileFieldName];
+
     const searchResults = await searchClient.search(userQuery, searchOptions);
 
     const similarDocs = [];
