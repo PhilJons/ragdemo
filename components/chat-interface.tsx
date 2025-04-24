@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useChat, type Message } from "ai/react";
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect, useState, useCallback } from "react";
 import { Moon, Send, Sun, X, Settings } from "lucide-react";
 import { useTheme } from "next-themes";
 import MessageContainer from "./message-container";
@@ -134,10 +134,12 @@ export default function ChatInterface() {
   const isLargeScreen = useMediaQuery({ minWidth: 768 });
   const [toolCall, setToolCall] = useState<string>();
   const [error, setError] = useState<string | null>(null);
-  const [documentMap, setDocumentMap] = useState<Record<string, string>>({});
+  const [documentMap, setDocumentMap] = useState<Record<string, { text: string; sourcefile: string }>>({});
   const [currentCitation, setCurrentCitation] = useState<string | null>(null);
   const [isCitationShown, setIsCitationShown] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const { 
     messages, 
     input, 
@@ -183,7 +185,7 @@ export default function ChatInterface() {
   useEffect(() => {
     if (data && Array.isArray(data)) {
       console.log("Processing data stream:", JSON.stringify(data));
-      const newDocumentMap: Record<string, string> = {};
+      const newDocumentMap: Record<string, { text: string; sourcefile: string }> = {};
       let foundDocs = false;
 
       // Iterate through all data entries and accumulate sourceDocuments
@@ -191,7 +193,7 @@ export default function ChatInterface() {
         if (typeof item === 'object' && item !== null && !Array.isArray(item) && item.hasOwnProperty('sourceDocuments') && Array.isArray(item.sourceDocuments)) {
           (item.sourceDocuments as any[]).forEach((doc: any) => {
             if (doc && doc.id && doc.text) {
-              newDocumentMap[doc.id] = doc.text;
+              newDocumentMap[doc.id] = { text: doc.text, sourcefile: doc.sourcefile };
               foundDocs = true;
             }
           });
@@ -212,10 +214,22 @@ export default function ChatInterface() {
     }
   }, [data]);
 
-  // Auto scroll to bottom when new messages arrive
+  // Scroll handler to update isAtBottom state
+  const handleScroll = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (container) {
+      const { scrollTop, scrollHeight, clientHeight } = container;
+      const atBottom = scrollHeight - scrollTop - clientHeight < 10; // Threshold of 10px
+      setIsAtBottom(atBottom);
+    }
+  }, []);
+
+  // Auto scroll to bottom only if user is already near the bottom
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    if (isAtBottom) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+    }
+  }, [messages, isAtBottom]); // Depend on messages AND isAtBottom
 
   const handleSubmitWithErrorReset = (event: React.FormEvent) => {
     setError(null);
@@ -223,7 +237,7 @@ export default function ChatInterface() {
   };
 
   const showCitation = (id: string) => {
-    const citationText = documentMap[id] || null;
+    const citationText = documentMap[id]?.text || null;
     setCurrentCitation(citationText);
     setIsCitationShown(true);
   };
@@ -618,6 +632,9 @@ export default function ChatInterface() {
               isLoading={isLoading}
               showCitation={showCitation}
               messagesEndRef={messagesEndRef}
+              documentMap={documentMap}
+              scrollContainerRef={scrollContainerRef}
+              onScroll={handleScroll}
             />
 
             <ChatInput 
