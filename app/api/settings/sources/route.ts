@@ -298,65 +298,142 @@ export async function GET(request: Request) {
   }
 }
 
-// DELETE handler to remove a source
+// DELETE handler to remove a source or clear all sources
 export async function DELETE(request: Request) {
    try {
     const { searchParams } = new URL(request.url);
-    
-    // --- Removed Temporary Delete All Logic --- //
+    const deleteAll = searchParams.get('deleteAll') === 'true';
 
-    // --- Normal Delete by originalFileId Logic ---
-    const originalFileIdToDelete = searchParams.get('id');
-    if (!originalFileIdToDelete) {
-      // Note: Changed error message back to only expect 'id'
-      return NextResponse.json({ success: false, error: 'Original File ID (param \'id\') is required.' }, { status: 400 });
+    // Define interface for the document shape when selecting only ID
+    interface DocumentWithId {
+        id: string;
+        [key: string]: any; // Allow other potential fields 
     }
-    
-    console.log(`Attempting to delete all chunks for originalFileId: ${originalFileIdToDelete}`);
 
-    // 1. Find all document chunks matching the originalFileId
-    const searchResults = await searchClient.search("*", {
-        filter: `originalFileId eq '${originalFileIdToDelete}'`, 
-        select: ["id"] 
-    });
+    if (deleteAll) {
+        console.log("Attempting to delete ALL documents from the index...");
 
-    const documentsToDelete: { id: string }[] = [];
-    let chunkCount = 0;
-    for await (const result of searchResults.results) {
-        chunkCount++;
-        const doc = result.document as any;
-        if (doc && typeof doc.id === 'string') {
-            documentsToDelete.push({ id: doc.id });
+        // Fetch all document IDs using the async iterator from search()
+        const allDocumentIds: { id: string }[] = [];
+        const BATCH_SIZE = 1000; // Log progress in batches
+        let documentsProcessed = 0;
+
+        try {
+            // Get the async iterator directly from search
+            const searchResultsIterator = searchClient.search<DocumentWithId>("*", { 
+                select: ["id"], 
+                // top: BATCH_SIZE // top might interfere with full iteration, remove for now
+            });
+
+            // Iterate through all results (SDK handles pagination)
+            for await (const result of searchResultsIterator) {
+                if (result.document && typeof result.document.id === 'string') {
+                    allDocumentIds.push({ id: result.document.id });
+                    documentsProcessed++;
+                    if (documentsProcessed % BATCH_SIZE === 0) {
+                        console.log(`Fetched ${documentsProcessed} document IDs...`);
+                    }
+                }
+            }
+            console.log(`Finished fetching. Total IDs found: ${documentsProcessed}`);
+
+        } catch(searchError: any) {
+            console.error("Error iterating search results during delete all:", searchError);
+            return NextResponse.json({ success: false, error: `Failed to list documents for deletion: ${searchError.message}` }, { status: 500 });
         }
-    }
+        
+        if (allDocumentIds.length === 0) {
+            console.log("Index is already empty. Nothing to delete.");
+            return new Response(null, { status: 204 });
+        }
 
-    if (documentsToDelete.length === 0) {
-        console.log(`No documents found matching originalFileId ${originalFileIdToDelete}. Nothing to delete.`);
-        return new Response(null, { status: 204 }); 
-    }
+        console.log(`Found ${allDocumentIds.length} total documents to delete.`);
 
-    console.log(`Found ${documentsToDelete.length} document chunks to delete.`);
+        const DELETE_BATCH_SIZE = 1000; // Azure Search limit
+        let successCount = 0;
+        let failCount = 0;
 
-    // 2. Delete the found documents in a batch
-    const result = await searchClient.deleteDocuments(documentsToDelete);
-    console.log("Document deletion batch result:", result);
+        for (let i = 0; i < allDocumentIds.length; i += DELETE_BATCH_SIZE) {
+            const batch = allDocumentIds.slice(i, i + DELETE_BATCH_SIZE);
+            console.log(`Deleting batch ${Math.floor(i / DELETE_BATCH_SIZE) + 1}... (${batch.length} documents)`);
+            try {
+                const result = await searchClient.deleteDocuments(batch);
+                const batchSuccess = result.results.filter(r => r.succeeded).length;
+                const batchFail = result.results.filter(r => !r.succeeded).length;
+                successCount += batchSuccess;
+                failCount += batchFail;
 
-    const failedDeletions = result.results.filter(r => !r.succeeded);
+                if (batchFail > 0) {
+                    const firstError = result.results.find(r => !r.succeeded);
+                    console.error(` Batch ${Math.floor(i / DELETE_BATCH_SIZE) + 1} failed for ${batchFail} documents. First error on key ${firstError?.key}: ${firstError?.errorMessage}`);
+                }
+            } catch (batchDeleteError: any) {
+                 console.error(`Error during batch delete ${Math.floor(i / DELETE_BATCH_SIZE) + 1}:`, batchDeleteError);
+                 failCount += batch.length; // Assume all in batch failed if the request itself errored
+            }
+        }
 
-    if (failedDeletions.length === 0) {
-      console.log(`All ${documentsToDelete.length} chunks for ${originalFileIdToDelete} deleted successfully.`);
-      return new Response(null, { status: 204 }); 
+        console.log(`Deletion process completed. Success: ${successCount}, Failed: ${failCount}`);
+
+        if (failCount === 0) {
+             console.log(`All ${allDocumentIds.length} documents deleted successfully.`);
+             return new Response(null, { status: 204 });
+        } else {
+            console.error(`Failed to delete ${failCount} out of ${allDocumentIds.length} documents.`);
+            return NextResponse.json({ success: false, error: `Failed to delete ${failCount} documents.` }, { status: 500 });
+        }
+
     } else {
-      const firstError = failedDeletions[0];
-      const errorMsg = firstError?.errorMessage ?? "Unknown error during batch deletion.";
-      console.error(`Failed to delete ${failedDeletions.length} out of ${documentsToDelete.length} chunks for ${originalFileIdToDelete}. First error on key ${firstError?.key}:`, errorMsg);
-      return NextResponse.json({ success: false, error: `Failed to delete some chunks: ${errorMsg}` }, { status: firstError?.statusCode ?? 500 });
+        // --- Existing Logic: Normal Delete by originalFileId --- 
+        const originalFileIdToDelete = searchParams.get('id');
+        if (!originalFileIdToDelete) {
+          return NextResponse.json({ success: false, error: 'Original File ID (param \'id\') is required when not using deleteAll=true.' }, { status: 400 });
+        }
+        
+        console.log(`Attempting to delete all chunks for originalFileId: ${originalFileIdToDelete}`);
+
+        // 1. Find all document chunks matching the originalFileId
+        const searchResults = await searchClient.search("*", {
+            filter: `originalFileId eq '${originalFileIdToDelete}'`, 
+            select: ["id"], 
+            top: 1000 // Assume max 1000 chunks per file for simplicity here
+        });
+
+        const documentsToDelete: { id: string }[] = [];
+        for await (const result of searchResults.results) {
+            const doc = result.document as any;
+            if (doc && typeof doc.id === 'string') {
+                documentsToDelete.push({ id: doc.id });
+            }
+        }
+
+        if (documentsToDelete.length === 0) {
+            console.log(`No documents found matching originalFileId ${originalFileIdToDelete}. Nothing to delete.`);
+            return new Response(null, { status: 204 }); 
+        }
+
+        console.log(`Found ${documentsToDelete.length} document chunks to delete.`);
+
+        // 2. Delete the found documents in a batch
+        const result = await searchClient.deleteDocuments(documentsToDelete);
+        console.log("Document deletion batch result:", result);
+
+        const failedDeletions = result.results.filter(r => !r.succeeded);
+
+        if (failedDeletions.length === 0) {
+          console.log(`All ${documentsToDelete.length} chunks for ${originalFileIdToDelete} deleted successfully.`);
+          return new Response(null, { status: 204 }); 
+        } else {
+          const firstError = failedDeletions[0];
+          const errorMsg = firstError?.errorMessage ?? "Unknown error during batch deletion.";
+          console.error(`Failed to delete ${failedDeletions.length} out of ${documentsToDelete.length} chunks for ${originalFileIdToDelete}. First error on key ${firstError?.key}:`, errorMsg);
+          return NextResponse.json({ success: false, error: `Failed to delete some chunks: ${errorMsg}` }, { status: firstError?.statusCode ?? 500 });
+        }
+        // --- End Normal Delete by originalFileId Logic ---
     }
-    // --- End Normal Delete by originalFileId Logic ---
 
   } catch (error: any) {
-    // Note: Changed error log message back
-    console.error('Error deleting source by originalFileId:', error);
+    console.error('Error during DELETE operation:', error);
     return NextResponse.json({ success: false, error: `An error occurred during deletion: ${error.message}` }, { status: 500 });
   }
 }
