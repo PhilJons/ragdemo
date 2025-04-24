@@ -13,6 +13,9 @@ interface MessageContainerProps {
   isLoading: boolean;
   showCitation: (id: string) => void;
   messagesEndRef: React.RefObject<HTMLDivElement>;
+  documentMap: Record<string, { text: string; sourcefile: string }>;
+  scrollContainerRef: React.RefObject<HTMLDivElement>;
+  onScroll: () => void;
 }
 
 // Custom components for Markdown rendering using standard Tailwind
@@ -57,10 +60,13 @@ const MarkdownComponents = {
 const MessageItem: React.FC<{
   message: Message;
   showCitation: (id: string) => void;
+  documentMap: Record<string, { text: string; sourcefile: string }>;
 }> = React.memo(
-  ({ message, showCitation }) => {
+  ({ message, showCitation, documentMap }) => {
     const replaceCitationFlags = (response: string): JSX.Element => {
-      if (!response.includes("[Source:")) {
+      // Updated pattern to handle new citation format [Source ID: <id>]
+      const citationPattern = "[Source ID:";
+      if (!response.includes(citationPattern)) {
         return (
           <div className="text-foreground dark:text-gray-100 [&_a]:!text-blue-600 [&_a]:!dark:text-white [&_strong]:!text-gray-900 [&_strong]:!dark:text-white [&_em]:!text-gray-900 [&_em]:!dark:text-white" style={{ color: 'inherit' }}>
             <style>{`
@@ -74,27 +80,17 @@ const MessageItem: React.FC<{
         );
       }
 
-      const segments = response.split(/(\[Source: [^\]]+\])/g);
-      const citationRegex = /\[Source: ([^\]]+)\]/;
-      const citationMapping: Record<string, number> = {};
-      let citationIndex = 1;
-
-      segments.forEach(segment => {
-        const match = segment.match(citationRegex);
-        if (match && match[1]) {
-          const citationId = match[1];
-          if (!(citationId in citationMapping)) {
-            citationMapping[citationId] = citationIndex++;
-          }
-        }
-      });
-
+      // Split response into segments that include citation tokens
+      const segments = response.split(/(\[Source ID: [^\]]+\])/g);
+      const citationRegex = /\[Source ID: ([^\]]+)\]/;
+      
       return (
         <div className="prose prose-sm max-w-none text-foreground dark:text-gray-100 [&_a]:!text-blue-600 [&_a]:!dark:text-white [&_strong]:!text-gray-900 [&_strong]:!dark:text-white [&_em]:!text-gray-900 [&_em]:!dark:text-white">
           {segments.map((segment, index) => {
             const match = segment.match(citationRegex);
             if (match && match[1]) {
               const citationId = match[1];
+              const fileName = documentMap[citationId]?.sourcefile?.split('/')?.pop() || citationId;
               return (
                 <button
                   key={`citation-${index}`}
@@ -102,7 +98,7 @@ const MessageItem: React.FC<{
                   className="inline underline text-blue-600 dark:text-white hover:text-primary dark:hover:text-gray-300 citation"
                   style={{ fontWeight: 'bold' }}
                 >
-                  <span>[{citationMapping[citationId]}]</span>
+                  <span>Source [{fileName}]</span>
                 </button>
               );
             }
@@ -145,15 +141,19 @@ const MessageItem: React.FC<{
       </motion.div>
     );
   },
-  (prev, next) => prev.message == next.message
+  (prev, next) => prev.message == next.message && prev.documentMap === next.documentMap
 );
 
 MessageItem.displayName = "MessageItem";
 
 const MessageContainer: React.FC<MessageContainerProps> = React.memo(
-  ({ messages, error, toolCall, isLoading, showCitation, messagesEndRef }) => {
+  ({ messages, error, toolCall, isLoading, showCitation, messagesEndRef, documentMap, scrollContainerRef, onScroll }) => {
     return (
-      <div className="flex-1 overflow-y-auto space-y-4 w-full">
+      <div 
+        ref={scrollContainerRef}
+        onScroll={onScroll}
+        className="flex-1 overflow-y-auto space-y-4 w-full"
+      >
         {messages.length === 0 && (
           <div className="flex p-2 overflow-y-auto mb-4 space-y-4 justify-center items-center">
             <ProjectOverview />
@@ -167,6 +167,7 @@ const MessageContainer: React.FC<MessageContainerProps> = React.memo(
                   key={message.id}
                   message={message}
                   showCitation={showCitation}
+                  documentMap={documentMap}
                 />
               )
           )}
@@ -209,7 +210,8 @@ const MessageContainer: React.FC<MessageContainerProps> = React.memo(
   (prev, next) =>
     prev.messages === next.messages &&
     prev.isLoading === next.isLoading &&
-    prev.error === next.error
+    prev.error === next.error &&
+    prev.documentMap === next.documentMap
 );
 
 MessageContainer.displayName = "MessageContainer";

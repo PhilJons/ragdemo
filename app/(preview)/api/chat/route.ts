@@ -44,6 +44,9 @@ export async function POST(req: Request) {
           retrievedContext = retrievedContext.replace(/Stop working the way you always have! Challenge every step!/g, '');
           
           console.log("Context prepared (with IDs):", retrievedContext);
+
+          // *** ADD LOGGING HERE ***
+          console.log("Source documents being appended to data stream:", JSON.stringify(sourceDocuments, null, 2));
           
           // Append the correctly structured sourceDocuments to the stream data
           data.append({ sourceDocuments }); // Frontend expects this shape { sourceDocuments: [{ id, text, sourcefile }] }
