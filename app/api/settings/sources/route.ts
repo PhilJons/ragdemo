@@ -8,6 +8,7 @@ import {
     DocumentModelAdministrationClient,
     AzureKeyCredential as DIKeyCredential 
 } from '@azure/ai-form-recognizer';
+import * as XLSX from 'xlsx'; // Import xlsx library
 
 // Initialize Azure Search Client (ensure environment variables are set)
 
@@ -121,15 +122,20 @@ export async function POST(request: Request) {
     const blobUrlWithSas = `${blockBlobClient.url}?${sasToken}`;
     console.log(`Generated SAS URL for DI (valid for 15 mins)`);
     
-    // --- Step 2: Extract Content using Document Intelligence ---
+    // --- Step 2: Extract Content using Document Intelligence or Specific Parsers ---
+    // Define supported types for DI and Excel
     const supportedDocIntelligenceTypes = [
       'application/pdf',
-      'application/vnd.openxmlformats-officedocument.presentationml.presentation', // Added PPTX
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // Added DOCX (optional)
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation', // PPTX
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // DOCX
       // Add other image types if needed: 'image/jpeg', 'image/png', 'image/tiff', 'image/bmp'
     ];
+    const supportedExcelTypes = [
+        'application/vnd.ms-excel', // .xls
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' // .xlsx
+    ];
 
-    if (supportedDocIntelligenceTypes.includes(file.type)) { 
+    if (supportedDocIntelligenceTypes.includes(file.type)) {
       console.log(`Analyzing document type ${file.type} with Document Intelligence: ${blockBlobClient.url}`);
       const poller = await documentAnalysisClient.beginAnalyzeDocumentFromUrl(
         "prebuilt-read", 
@@ -144,6 +150,33 @@ export async function POST(request: Request) {
       } else {
         console.warn("Document Intelligence analysis completed but returned no content.");
       }
+    } else if (supportedExcelTypes.includes(file.type)) {
+        console.log(`Parsing Excel file (${file.type}) directly...`);
+        try {
+            const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
+            let extractedText = '';
+            workbook.SheetNames.forEach(sheetName => {
+                const worksheet = workbook.Sheets[sheetName];
+                // Convert sheet to array of arrays (rows)
+                const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
+                if (rows.length > 0) {
+                    extractedText += `Sheet: ${sheetName}\n`;
+                    rows.forEach((row, rowIndex) => {
+                        // Format row: "Row X: Col1_Value | Col2_Value | ..."
+                        const rowContent = row.map(cell => cell !== null && cell !== undefined ? String(cell) : '').join(' | ');
+                        if (rowContent.trim()) { // Only include non-empty rows
+                           extractedText += `Row ${rowIndex + 1}: ${rowContent}\n`;
+                        }
+                    });
+                    extractedText += '\n'; // Add a blank line between sheets
+                }
+            });
+            fileContent = extractedText.trim();
+            console.log(`Excel parsing complete. Extracted ${fileContent.length} characters.`);
+        } catch (excelError: any) {
+            console.error(`Error parsing Excel file ${file.name}:`, excelError);
+            // Optionally try plain text extraction as fallback?
+        }
     } else if (file.type.startsWith('text/')) {
       console.log("Reading text file directly...");
       fileContent = fileBuffer.toString('utf-8');
