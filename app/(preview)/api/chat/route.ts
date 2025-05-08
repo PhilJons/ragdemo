@@ -9,7 +9,17 @@ export const maxDuration = 30;
 
 export async function POST(req: Request) {
   try {
-    const { messages }: { messages: CoreMessage[] } = await req.json();
+    const { 
+      messages, 
+      selectedSystemPromptContent, 
+      temperature,
+      maxTokens
+    }: { 
+      messages: CoreMessage[], 
+      selectedSystemPromptContent?: string, 
+      temperature?: number,
+      maxTokens?: number
+    } = await req.json();
 
     // --- Manual RAG Context Injection ---
     let retrievedContext = "";
@@ -35,9 +45,9 @@ export async function POST(req: Request) {
           }));
 
           retrievedContext = "Context from knowledge base:\n";
-          // Include sourcefile in the system prompt context if desired, or just use ID
+          // Include sourcefile in the system prompt context
           validResults.forEach((result, index) => {
-            retrievedContext += `[Source ID: ${result.id}] ${result.text}\n`;
+            retrievedContext += `[Source ID: ${result.id}, sourcefile: ${result.sourcefile}] ${result.text}\n`;
           });
           
           // TEMP FIX: Remove potentially problematic phrase flagged by Azure Content Filter
@@ -78,17 +88,14 @@ export async function POST(req: Request) {
     // --- End Modified Context Injection ---
     // --- End Manual RAG Context Injection ---
 
-    const result = await streamText({
-      model: azure(process.env.AZURE_DEPLOYMENT_NAME!),
-      messages: messagesWithContext, // Use the potentially modified messages array
-      system: `You are StrategyGPT, an expert strategic-analysis assistant.
-Your sole knowledge source is the **context documents** supplied via Retrieval-Augmented Generation (RAG).  Each document chunk is annotated with a unique identifier in the form \`[Source ID: <ID>]\` and includes metadata such as *sourcefile* (the file name) and *title*.
+    const systemPromptToUse = selectedSystemPromptContent || `You are StrategyGPT, an expert strategic-analysis assistant.
+Your sole knowledge source is the **context documents** supplied via Retrieval-Augmented Generation (RAG). Each document chunk is annotated with its source, formatted as \`[Source ID: <ID>, sourcefile: <FILENAME>]\`.
 
 ====================  CORE BEHAVIOUR  ====================
 1. Grounded answers only – never rely on external or prior knowledge.  If the context is insufficient, reply with:  
    "I cannot answer this question based on the provided information."
 
-2. Inline citations – Every factual statement **must** be followed immediately by the source id(s) in square brackets, e.g. *Strategic alliances grew 45 % in 2023* [Source ID: doc17_chunk3].  Use **multiple ids** when synthesising several snippets.
+2. Inline citations – Every factual statement **must** be followed immediately by the source identifier and filename in the format: \`[Source ID: <ID_from_context>, sourcefile: <FILENAME_from_context>]\`. Use **multiple citations** when synthesising several snippets.
 
 3. Structured & executive-ready output – Use Markdown with clear headings.  Employ tables, numbered / bulleted lists and call-out blocks where helpful.
 
@@ -103,7 +110,7 @@ You can perform any of the following on the provided material:
 
 ====================  HOW TO REASON WITH FILE NAMES  ====================
 • Whenever a query mentions a **file name, title, or obvious alias**, treat it as a search cue.  
-• If the context includes file-name metadata, prefer chunks originating from files whose name closely matches the user query.
+• If the context includes file-name metadata (which it now does explicitly in each chunk header), prefer chunks originating from files whose name closely matches the user query.
 
 ====================  RESPONSE TEMPLATE GUIDANCE  ====================
 1. *(Optional)* **Brief Answer / TL;DR** – one-sentence takeaway.  
@@ -111,7 +118,14 @@ You can perform any of the following on the provided material:
 3. **Recommended Actions** – concise bullet list (when the user request calls for it).  
 4. **Sources** – If not already inline, end with a "Sources" section containing all ids used.
 
-Remember: clarity, brevity, and rigorous sourcing are paramount.`,
+Remember: clarity, brevity, and rigorous sourcing are paramount.`; // Fallback to existing default
+
+    const result = await streamText({
+      model: azure(process.env.AZURE_DEPLOYMENT_NAME!),
+      messages: messagesWithContext, // Use the potentially modified messages array
+      system: systemPromptToUse, // Use the dynamic or fallback system prompt
+      temperature: temperature, // Pass temperature
+      maxTokens: maxTokens, // Pass maxTokens
       onFinish() {
         // Close the data stream when the LLM stream finishes
         console.log("LLM stream finished, closing data stream.");

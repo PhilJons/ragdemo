@@ -20,6 +20,69 @@ import SettingsDialog from "./settings-dialog";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+// --- System Prompt Types and Constants ---
+interface SystemPrompt {
+  name: string;
+  content: string;
+}
+
+const SYSTEM_PROMPTS_LOCAL_STORAGE_KEY = 'customSystemPrompts';
+
+const DEFAULT_SYSTEM_PROMPTS: SystemPrompt[] = [
+  {
+    name: "Default Financial Analyst",
+    content: `You are StrategyGPT, an expert strategic-analysis assistant.
+Your sole knowledge source is the **context documents** supplied via Retrieval-Augmented Generation (RAG).  Each document chunk is annotated with a unique identifier in the form \`[Source ID: <ID>]\` and includes metadata such as *sourcefile* (the file name) and *title*.
+
+====================  CORE BEHAVIOUR  ====================
+1. Grounded answers only – never rely on external or prior knowledge.  If the context is insufficient, reply with:  
+   "I cannot answer this question based on the provided information."
+
+2. Inline citations – Every factual statement **must** be followed immediately by the source id(s) in square brackets, e.g. *Strategic alliances grew 45 % in 2023* [Source ID: doc17_chunk3].  Use **multiple ids** when synthesising several snippets.
+
+3. Structured & executive-ready output – Use Markdown with clear headings.  Employ tables, numbered / bulleted lists and call-out blocks where helpful.
+
+====================  ADVANCED TASKS SUPPORTED  ====================
+You can perform any of the following on the provided material:
+• Competitive benchmarking & trend analysis over time.  
+• SWOT or gap analyses combining internal (e.g., \`internal-strategy_2023-Q4.md\`) and external reports.  
+• Campaign post-mortems: list success drivers & improvement areas.  
+• Multi-document aggregation: merge insights from diverse research papers into a single narrative.  
+• Meeting prep digests: surface the five most relevant points for a given agenda.  
+• Personalised retrieval: answer questions that reference specific projects, clients, or file names.
+
+====================  HOW TO REASON WITH FILE NAMES  ====================
+• Whenever a query mentions a **file name, title, or obvious alias**, treat it as a search cue.  
+• If the context includes file-name metadata, prefer chunks originating from files whose name closely matches the user query.
+
+====================  RESPONSE TEMPLATE GUIDANCE  ====================
+1. *(Optional)* **Brief Answer / TL;DR** – one-sentence takeaway.  
+2. **Detailed Analysis** – use subsections per theme (e.g., *Competitor Trends*, *Opportunities*, *SWOT Table*).  
+3. **Recommended Actions** – concise bullet list (when the user request calls for it).  
+4. **Sources** – If not already inline, end with a "Sources" section containing all ids used.
+
+Remember: clarity, brevity, and rigorous sourcing are paramount.`
+  },
+  {
+    name: "Boilerplate System Prompt",
+    content: `--- Who will receive this (audience) ---
+(e.g., "Portfolio managers", "Investment committee", "Equity research team")
+
+--- Background information ---
+(e.g., "Analyzing quarterly earnings reports from several tech companies.", "Tracking analyst sentiment changes for a specific stock based on multiple research notes.")
+
+--- Task definition, what you expect it to do, the vision ---
+(e.g., "Summarize shifts in analyst ratings and price targets across the provided reports.", "Extract key themes and forward-looking statements from earnings call transcripts.", "Compare research house views on a company, highlighting changes over time and consensus points.")
+
+--- Examples of good outputs (optional) ---
+(e.g., "Imagine a previous analysis you liked – you can paste a snippet of its output here.", "Provide a full example text of a desired summary here.")
+
+--- Desired output structure (optional) ---
+(e.g., "A report with: 1. Executive TLDR (3-5 bullets). 2. Detailed breakdown by research house, showing report date, rating, price target, and key commentary. 3. Appendix listing sources.", "Output similar to the default financial analyst prompt\'s structure.", "Main sections: 'Overall Sentiment Shift', 'Key Themes by Research House', 'Price Target Evolution'.", "Output a list of key forecast changes with analyst justifications.")`
+  }
+];
+// --- End System Prompt Types and Constants ---
+
 // Custom components for Markdown rendering
 const MarkdownComponents = {
   // Handle links properly
@@ -140,14 +203,33 @@ export default function ChatInterface() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // --- System Prompt State ---
+  const [systemPrompts, setSystemPrompts] = useState<SystemPrompt[]>(DEFAULT_SYSTEM_PROMPTS);
+  const [selectedPromptName, setSelectedPromptName] = useState<string>(DEFAULT_SYSTEM_PROMPTS[0]?.name || "");
+  const [selectedSystemPromptContent, setSelectedSystemPromptContent] = useState<string>(DEFAULT_SYSTEM_PROMPTS[0]?.content || "");
+  const [defaultPromptNames, setDefaultPromptNames] = useState<string[]>(DEFAULT_SYSTEM_PROMPTS.map(p => p.name));
+  // --- End System Prompt State ---
+
+  // New state for Temperature and Max Tokens
+  const [temperature, setTemperature] = useState<number>(0.7); // Default temperature
+  const [maxTokens, setMaxTokens] = useState<number>(2000); // Default max tokens
+
   const { 
     messages, 
     input, 
     handleInputChange, 
     handleSubmit, 
     isLoading, 
-    data
+    data,
+    setMessages
   } = useChat({
+    api: '/api/chat',
+    body: {
+      selectedSystemPromptContent: selectedSystemPromptContent,
+      temperature,
+      maxTokens,
+    },
     onError: (error: any) => {
       console.error("API Error:", error); // Log the error
       let errorMessage = "An unexpected error occurred.";
@@ -171,6 +253,81 @@ export default function ChatInterface() {
   });
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const citationPanelRef = useRef<ImperativePanelHandle>(null);
+
+  // --- Load and Manage System Prompts ---
+  useEffect(() => {
+    try {
+      const storedPrompts = localStorage.getItem(SYSTEM_PROMPTS_LOCAL_STORAGE_KEY);
+      if (storedPrompts) {
+        const customPrompts: SystemPrompt[] = JSON.parse(storedPrompts);
+        // Filter out any default prompts that might have been saved by mistake
+        const uniqueCustomPrompts = customPrompts.filter(cp => !DEFAULT_SYSTEM_PROMPTS.some(dp => dp.name === cp.name));
+        setSystemPrompts([...DEFAULT_SYSTEM_PROMPTS, ...uniqueCustomPrompts]);
+      } else {
+        setSystemPrompts(DEFAULT_SYSTEM_PROMPTS);
+      }
+    } catch (e) {
+      console.error("Failed to load or parse custom prompts from LocalStorage:", e);
+      setSystemPrompts(DEFAULT_SYSTEM_PROMPTS); // Fallback to defaults
+    }
+  }, []);
+
+  useEffect(() => {
+    // Update content when name changes
+    const currentPrompt = systemPrompts.find(p => p.name === selectedPromptName);
+    setSelectedSystemPromptContent(currentPrompt?.content || DEFAULT_SYSTEM_PROMPTS[0]?.content || "");
+  }, [selectedPromptName, systemPrompts]);
+
+  const handleSelectPrompt = (name: string) => {
+    setSelectedPromptName(name);
+    // Optional: Clear chat history when prompt changes?
+    // setMessages([]); 
+    // console.log(`Switched to system prompt: ${name}. Chat history cleared.`);
+  };
+
+  const handleAddNewPrompt = (name: string, content: string) => {
+    if (systemPrompts.some(p => p.name === name)) {
+      alert("A prompt with this name already exists. Please choose a unique name.");
+      return;
+    }
+    const newPrompt: SystemPrompt = { name, content };
+    const updatedPrompts = [...systemPrompts, newPrompt];
+    setSystemPrompts(updatedPrompts);
+    const customPromptsToSave = updatedPrompts.filter(p => !DEFAULT_SYSTEM_PROMPTS.some(dp => dp.name === p.name));
+    localStorage.setItem(SYSTEM_PROMPTS_LOCAL_STORAGE_KEY, JSON.stringify(customPromptsToSave));
+    setSelectedPromptName(name); // Optionally select the new prompt
+  };
+
+  const handleUpdatePrompt = (originalName: string, newName: string, newContent: string) => {
+    if (newName !== originalName && systemPrompts.some(p => p.name === newName)) {
+      alert("A prompt with the new name already exists. Please choose a unique name.");
+      return;
+    }
+    const updatedPrompts = systemPrompts.map(p => 
+      p.name === originalName ? { name: newName, content: newContent } : p
+    );
+    setSystemPrompts(updatedPrompts);
+    const customPromptsToSave = updatedPrompts.filter(p => !DEFAULT_SYSTEM_PROMPTS.some(dp => dp.name === p.name));
+    localStorage.setItem(SYSTEM_PROMPTS_LOCAL_STORAGE_KEY, JSON.stringify(customPromptsToSave));
+    if (selectedPromptName === originalName) {
+      setSelectedPromptName(newName);
+    }
+  };
+
+  const handleDeletePrompt = (name: string) => {
+    if (DEFAULT_SYSTEM_PROMPTS.some(dp => dp.name === name)) {
+      alert("Default prompts cannot be deleted.");
+      return;
+    }
+    const updatedPrompts = systemPrompts.filter(p => p.name !== name);
+    setSystemPrompts(updatedPrompts);
+    const customPromptsToSave = updatedPrompts.filter(p => !DEFAULT_SYSTEM_PROMPTS.some(dp => dp.name === p.name));
+    localStorage.setItem(SYSTEM_PROMPTS_LOCAL_STORAGE_KEY, JSON.stringify(customPromptsToSave));
+    if (selectedPromptName === name) {
+      setSelectedPromptName(DEFAULT_SYSTEM_PROMPTS[0]?.name || ""); // Revert to default
+    }
+  };
+  // --- End Load and Manage System Prompts ---
 
   // expand the right panel when a citation is selected
   useEffect(() => {
@@ -612,16 +769,16 @@ export default function ChatInterface() {
             <div className="flex flex-row justify-between items-center p-4">
               <div className="flex items-center space-x-4">
                 <ThemeChanger />
-                <Button variant="ghost" size="icon" onClick={() => setIsSettingsOpen(true)}>
+                <Button variant="ghost" size="icon" onClick={() => setIsSettingsOpen(true)} title="Data Source Settings">
                   <Settings className="h-[1.2rem] w-[1.2rem]" />
-                  <span className="sr-only">Settings</span>
+                  <span className="sr-only">Data Settings</span>
                 </Button>
               </div>
             </div>
             <div className="text-center mb-4 md:mb-8">
               <h1 className="text-2xl font-bold mb-2">Secure RAG Demo</h1>
               <p className="text-sm text-muted-foreground">
-                Explore Retrieval-Augmented Generation hosted securely on Azure. Manage data sources via the Settings panel (⚙️) in the top left.
+                Explore Retrieval-Augmented Generation hosted securely on Azure. Manage data sources and system prompts via the Settings panel (⚙️) in the top left.
               </p>
             </div>
 
@@ -695,7 +852,22 @@ export default function ChatInterface() {
         </DrawerContent>
       </Drawer>
 
-      <SettingsDialog isOpen={isSettingsOpen} onOpenChange={setIsSettingsOpen} />
+      <SettingsDialog 
+        isOpen={isSettingsOpen} 
+        onOpenChange={setIsSettingsOpen}
+        systemPrompts={systemPrompts}
+        selectedPromptName={selectedPromptName}
+        onSelectPrompt={handleSelectPrompt}
+        onAddNewPrompt={handleAddNewPrompt}
+        onUpdatePrompt={handleUpdatePrompt}
+        onDeletePrompt={handleDeletePrompt}
+        defaultPromptNames={defaultPromptNames}
+        isLoadingChat={isLoading}
+        temperature={temperature}
+        onTemperatureChange={setTemperature}
+        maxTokens={maxTokens}
+        onMaxTokensChange={setMaxTokens}
+      />
 
     </>
   );
