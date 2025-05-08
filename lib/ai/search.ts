@@ -44,19 +44,23 @@ if (!endpoint || !credential || !indexName) {
 export const findRelevantContent = async (userQuery: string) => {
   try {
     const searchOptions: SearchOptions<object, string> = {
-      top: 5,
-      select: ["id", contentColumn, sourcefileFieldName] // Include id, content, and sourcefile
+      top: 5, // Note: Semantic ranking operates on top 50 results from initial retrieval.
+      select: ["id", contentColumn, sourcefileFieldName]
     };
 
     let semanticConfigName: string | undefined;
     if (process.env.AZURE_SEARCH_SEMANTIC_CONFIGURATION_NAME) {
       // semanticConfigName = process.env.AZURE_SEARCH_SEMANTIC_CONFIGURATION_NAME;
-      // The following lines are commented out due to persistent type errors.
-      // Please verify the correct way to configure semantic search for your installed version of @azure/search-documents.
-      // searchOptions.queryType = "semantic";
-      // searchOptions.semanticConfigurationName = semanticConfigName;
+      // The following lines are commented out due to persistent type errors
+      // with @azure/search-documents@^12.1.0. Neither direct assignment to
+      // searchOptions.queryType/semanticConfiguration nor using a nested
+      // searchOptions.semanticSearch object resolved the TypeScript errors.
+      // Further investigation into the specific SDK version's API or potential
+      // type conflicts would be needed.
+      // searchOptions.queryType = "semantic"; 
+      // searchOptions.semanticSearch = { configurationName: semanticConfigName };
       console.warn(
-        "Semantic search configuration is temporarily disabled due to build issues. Please verify the correct configuration for your @azure/search-documents version."
+        "Semantic search configuration is temporarily disabled due to persistent type errors. Please verify the correct configuration for @azure/search-documents@^12.1.0."
       );
     }
 
@@ -142,13 +146,20 @@ export const findRelevantContent = async (userQuery: string) => {
     return similarDocs;
 
   } catch (error) {
-    console.error("Error in findRelevantContent:", error);
-    // Restore original error structure, add empty sourcefile
+    console.error("Error in findRelevantContent:", error); // Log the full error object
+    // Log specific properties if they exist, for more structured logging
+    if (error instanceof Error) {
+      console.error(`findRelevantContent Error Details: message=${error.message}, stack=${error.stack}`);
+    } else {
+      console.error("findRelevantContent encountered a non-Error exception:", error);
+    }
+    
+    // Return a structured error object, maintaining previous structure but ensuring sourcefile is present
     return [{
-      text: "No relevant information found. There was an issue connecting to the knowledge base.",
+      text: "An error occurred while retrieving relevant information from the knowledge base.", // Slightly more informative message
       id: "error",
       similarity: 0,
-      sourcefile: ''
+      sourcefile: '' // Ensure sourcefile is included as per expected type
     }];
   }
 };

@@ -1,7 +1,7 @@
 // Simple Node.js script to seed Azure Search index
 const { SearchClient, AzureKeyCredential: SearchCredential } = require("@azure/search-documents"); // Keep SearchIndexClient import in case needed later, but not used now
-// Import Azure OpenAI v1 beta
-const { OpenAIClient, AzureKeyCredential } = require("@azure/openai"); // Import both from @azure/openai
+// Import generateEmbedding from the lib
+const { generateEmbedding } = require("../lib/azureOpenAI"); // Adjusted path
 require("dotenv").config();
 
 // Azure Search configuration
@@ -10,10 +10,11 @@ const searchKey = process.env.AZURE_SEARCH_KEY; // Load from environment variabl
 const indexName = process.env.AZURE_SEARCH_INDEX_NAME;
 const vectorField = process.env.AZURE_SEARCH_VECTOR_FIELD || "embedding"; // Use env var or default
 
-// Azure OpenAI configuration
-const openAIEndpoint = process.env.AZURE_OPENAI_API_ENDPOINT;
-const openAIKey = process.env.AZURE_API_KEY; // Load from environment variable
-const embeddingDeployment = process.env.AZURE_EMBEDDING_DEPLOYMENT_NAME;
+// Azure OpenAI configuration (ensure these are set for @ai-sdk/azure via lib/azureOpenAI)
+const openAIEndpoint = process.env.AZURE_OPENAI_ENDPOINT; // Used by @ai-sdk/azure
+const openAIKey = process.env.AZURE_API_KEY;             // Used by @ai-sdk/azure
+const openAIResourceName = process.env.AZURE_RESOURCE_NAME; // Used by @ai-sdk/azure
+const embeddingDeployment = process.env.AZURE_EMBEDDING_DEPLOYMENT_NAME; // Used by @ai-sdk/azure
 
 // Sample documents to upload
 const sampleDocuments = [
@@ -52,19 +53,23 @@ async function main() {
   if (!indexName) {
     throw new Error("AZURE_SEARCH_INDEX_NAME environment variable is not set.");
   }
+  // Updated Azure OpenAI env var checks
   if (!openAIEndpoint) {
-    throw new Error("AZURE_OPENAI_API_ENDPOINT environment variable is not set.");
+    throw new Error("AZURE_OPENAI_ENDPOINT environment variable is not set (required by @ai-sdk/azure).");
   }
   if (!openAIKey) {
-    throw new Error("AZURE_API_KEY environment variable is not set.");
+    throw new Error("AZURE_API_KEY environment variable is not set (required by @ai-sdk/azure).");
+  }
+  if (!openAIResourceName) { // Added check for resource name
+    throw new Error("AZURE_RESOURCE_NAME environment variable is not set (required by @ai-sdk/azure).");
   }
   if (!embeddingDeployment) {
-    throw new Error("AZURE_EMBEDDING_DEPLOYMENT_NAME environment variable is not set.");
+    throw new Error("AZURE_EMBEDDING_DEPLOYMENT_NAME environment variable is not set (required by @ai-sdk/azure).");
   }
   
   // Create credentials
   const searchCredential = new SearchCredential(searchKey);
-  const openAICredential = new AzureKeyCredential(openAIKey);
+  // OpenAIClient and its credential are no longer needed here
 
   // Create clients
   const searchClient = new SearchClient(
@@ -74,16 +79,10 @@ async function main() {
     { serviceApiVersion: "2023-11-01" } // Explicitly set API version
   );
 
-  // OpenAI client with API key (using v1 beta style)
-  const openAIClient = new OpenAIClient(openAIEndpoint, openAICredential);
+  // OpenAI client (from @azure/openai) is no longer needed here
+  // The local generateEmbedding function is also no longer needed as we import it
 
-  // Generate embeddings for text
-  async function generateEmbedding(text) {
-    const response = await openAIClient.getEmbeddings(embeddingDeployment, [text]);
-    return response.data[0].embedding;
-  }
-
-  console.log("Generating embeddings and uploading documents...");
+  console.log("Generating embeddings using shared function and uploading documents...");
 
   try {
     // Generate embeddings for each document
@@ -91,7 +90,8 @@ async function main() {
 
     for (const doc of sampleDocuments) {
       try {
-        const embedding = await generateEmbedding(doc.content);
+        // Use the imported generateEmbedding function
+        const embedding = await generateEmbedding(doc.content); 
         documentsWithEmbeddings.push({
           ...doc,
           [vectorField]: embedding // Use vectorField constant

@@ -64,9 +64,13 @@ const MessageItem: React.FC<{
 }> = React.memo(
   ({ message, showCitation, documentMap }) => {
     const replaceCitationFlags = (response: string): JSX.Element => {
-      // Updated pattern to handle new citation format [Source ID: <id>]
-      const citationPattern = "[Source ID:";
-      if (!response.includes(citationPattern)) {
+      // Updated pattern to handle new citation format: [Source ID: <id>, sourcefile: <filename>]
+      // Regex captures ID in group 1 and filename in group 2
+      const citationRegex = /\[Source ID: ([^,]+), sourcefile: ([^\]]+)\]/g;
+      
+      // Check if the new pattern exists
+      if (!citationRegex.test(response)) {
+        // If no new citations, render as plain markdown
         return (
           <div className="text-foreground dark:text-gray-100 [&_a]:!text-blue-600 [&_a]:!dark:text-white [&_strong]:!text-gray-900 [&_strong]:!dark:text-white [&_em]:!text-gray-900 [&_em]:!dark:text-white" style={{ color: 'inherit' }}>
             <style>{`
@@ -80,36 +84,56 @@ const MessageItem: React.FC<{
         );
       }
 
-      // Split response into segments that include citation tokens
-      const segments = response.split(/(\[Source ID: [^\]]+\])/g);
-      const citationRegex = /\[Source ID: ([^\]]+)\]/;
+      // Split the response string by the citation pattern, keeping the delimiters
+      const segments = response.split(citationRegex);
+      const elements: JSX.Element[] = [];
+      let citationIndex = 0; // To give unique keys to citations
+
+      // The split array will have text segments interleaved with captured groups
+      // segments[0] = text before first citation
+      // segments[1] = id of first citation
+      // segments[2] = filename of first citation
+      // segments[3] = text between first and second citation
+      // segments[4] = id of second citation
+      // segments[5] = filename of second citation
+      // ... and so on
+
+      for (let i = 0; i < segments.length; i++) {
+        if (i % 3 === 0) {
+          // This is a text segment
+          if (segments[i] && segments[i].length > 0) {
+             elements.push(
+               <span key={`text-${i}`} className="inline [&_a]:!text-blue-600 [&_a]:!dark:text-white [&_strong]:!text-gray-900 [&_strong]:!dark:text-white [&_em]:!text-gray-900 [&_em]:!dark:text-white">
+                 <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>
+                   {segments[i]}
+                 </ReactMarkdown>
+               </span>
+            );
+          }
+        } else if (i % 3 === 1) {
+          // This is an ID segment (captured group 1)
+          const citationId = segments[i];
+          // The corresponding filename is the next element (captured group 2)
+          const sourcefile = segments[i + 1] || 'Unknown File'; 
+          const cleanFilename = sourcefile.split('/').pop(); // Get just the filename
+
+          elements.push(
+            <button
+              key={`citation-${citationIndex++}`}
+              onClick={() => showCitation(citationId)} // Use the correctly extracted ID
+              className="inline underline text-blue-600 dark:text-white hover:text-primary dark:hover:text-gray-300 citation font-medium px-1 rounded-sm bg-blue-100 dark:bg-blue-900/50 transition-colors"
+              title={`Source: ${cleanFilename} (ID: ${citationId})`}
+            >
+              <span>[{cleanFilename}]</span>{/* Display cleaner citation */}
+            </button>
+          );
+          i++; // Skip the filename segment in the next iteration
+        }
+      }
       
       return (
         <div className="prose prose-sm max-w-none text-foreground dark:text-gray-100 [&_a]:!text-blue-600 [&_a]:!dark:text-white [&_strong]:!text-gray-900 [&_strong]:!dark:text-white [&_em]:!text-gray-900 [&_em]:!dark:text-white">
-          {segments.map((segment, index) => {
-            const match = segment.match(citationRegex);
-            if (match && match[1]) {
-              const citationId = match[1];
-              const fileName = documentMap[citationId]?.sourcefile?.split('/')?.pop() || citationId;
-              return (
-                <button
-                  key={`citation-${index}`}
-                  onClick={() => showCitation(citationId)}
-                  className="inline underline text-blue-600 dark:text-white hover:text-primary dark:hover:text-gray-300 citation"
-                  style={{ fontWeight: 'bold' }}
-                >
-                  <span>Source [{fileName}]</span>
-                </button>
-              );
-            }
-            return (
-              <span key={`text-${index}`} className="inline [&_a]:!text-blue-600 [&_a]:!dark:text-white [&_strong]:!text-gray-900 [&_strong]:!dark:text-white [&_em]:!text-gray-900 [&_em]:!dark:text-white">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>
-                  {segment}
-                </ReactMarkdown>
-              </span>
-            );
-          })}
+          {elements}
         </div>
       );
     };
