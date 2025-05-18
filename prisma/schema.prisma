@@ -1,0 +1,87 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String        @id @default(cuid())
+  oid         String        @unique // Azure AD Object ID
+  displayName String?
+  email       String?       @unique
+  projects    UserProject[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+}
+
+model Project {
+  id                       String        @id @default(cuid())
+  name                     String        @unique
+  description              String?
+  users                    UserProject[]
+  documents                Document[]
+  prompts                  ProjectPrompt[]
+
+  // Project-specific settings
+  activeProjectPromptId    String?       @unique // FK to ProjectPrompt, must be unique for 1-to-1
+  activeProjectPrompt      ProjectPrompt? @relation("ActiveProjectPrompt", fields: [activeProjectPromptId], references: [id], onDelete: SetNull) // Optional: Set null if linked prompt is deleted
+  activeGlobalPromptName   String?       // Name of the global/default prompt if one is active for this project
+  // Constraint: Only one of activeProjectPromptId or activeGlobalPromptName should be set, or neither.
+  
+  temperature              Float?        // Project-specific temperature
+  maxTokens                Int?          // Project-specific max tokens
+
+  createdAt                DateTime      @default(now())
+  updatedAt                DateTime      @updatedAt
+}
+
+model UserProject {
+  userId    String
+  projectId String
+  user      User    @relation(fields: [userId], references: [id])
+  project   Project @relation(fields: [projectId], references: [id])
+  assignedAt DateTime @default(now())
+  assignedBy String? // Could be user's OID or name
+
+  @@id([userId, projectId])
+}
+
+model Document {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id])
+  blobUri     String   @unique // URI to the blob in Azure Storage
+  searchDocId String?  @unique // ID used in Azure AI Search, if different
+  fileName    String
+  // Add other metadata fields as needed, e.g.:
+  // fileType String?
+  // size     Int?
+  // author   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime      @updatedAt
+}
+
+// New model for project-specific prompts
+model ProjectPrompt {
+  id        String   @id @default(cuid())
+  name      String
+  content   String
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  isDefault Boolean  @default(false)
+  
+  // Field for the other side of the one-to-one relation for an active prompt
+  isActivePromptForProject Project? @relation("ActiveProjectPrompt") // Matches the name in Project model
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([projectId, name], name: "unique_project_prompt_name")
+}

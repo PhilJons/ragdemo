@@ -41,11 +41,11 @@ if (!endpoint || !credential || !indexName) {
 }
 
 // findRelevantContent uses the imported generateEmbedding
-export const findRelevantContent = async (userQuery: string) => {
+export const findRelevantContent = async (userQuery: string, projectId?: string) => {
   try {
     const searchOptions: SearchOptions<object, string> = {
       top: 5, // Note: Semantic ranking operates on top 50 results from initial retrieval.
-      select: ["id", contentColumn, sourcefileFieldName]
+      select: ["id", contentColumn, sourcefileFieldName, "projectId"]
     };
 
     let semanticConfigName: string | undefined;
@@ -107,6 +107,20 @@ export const findRelevantContent = async (userQuery: string) => {
     // to be marked as searchable in your Azure AI Search index definition.
 
     searchOptions.searchFields = [contentColumn, "title", sourcefileFieldName];
+
+    // Add filter expression to search only in specified project if provided
+    if (projectId) {
+      try {
+        // First try using the dedicated projectId field
+        searchOptions.filter = `projectId eq '${projectId}'`;
+        console.log(`Filtering search results to project: ${projectId}`);
+      } catch (filterError: any) {
+        // Fall back to the sourcefile approach if the projectId field isn't available
+        console.warn(`Error using projectId field for filtering: ${filterError.message}`);
+        console.log("Falling back to sourcefile pattern matching for project filtering");
+        searchOptions.filter = `search.ismatchscoring('${projectId}', '${sourcefileFieldName}')`;
+      }
+    }
 
     const searchResults = await searchClient.search(userQuery, searchOptions);
 

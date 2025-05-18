@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import Link from "next/link";
 import { AzureIcon , VercelIcon} from "./icons";
 import { useTheme } from 'next-themes';
+import Image from 'next/image';
 
 const ProjectOverview = () => {
   const { theme } = useTheme();
@@ -25,10 +26,13 @@ const ProjectOverview = () => {
     >
       <div className="border-2 rounded-lg p-6 flex flex-col items-center gap-4 text-sm text-muted-foreground dark:border-neutral-700 dark:bg-neutral-900">
         {mounted && (
-          <img 
+          <Image 
             src={logoSrc} 
             alt="Aura Logo" 
+            width={160}
+            height={40}
             className="h-10 mb-4"
+            priority
           />
         )}
         <p className="text-center">

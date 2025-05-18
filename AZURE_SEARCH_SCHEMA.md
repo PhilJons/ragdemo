@@ -12,7 +12,8 @@ This document outlines the inferred schema for the Azure AI Search index used by
 | `content`          | `Edm.String`              | No  | Yes        | No         | No       | No        | The text chunk content. Name configured via `AZURE_SEARCH_CONTENT_FIELD` env var.                       |
 | `embedding`        | `Collection(Edm.Single)`  | No  | Yes (Vec)  | No         | No       | No        | Vector embedding of the `content`. Name configured via `AZURE_SEARCH_VECTOR_FIELD` env var. Dimensions depend on `AZURE_EMBEDDING_DEPLOYMENT_NAME`. |
 | `sourcefile`       | `Edm.String`              | No  | Yes        | Yes        | Yes      | Yes       | Original filename of the uploaded document.                                                             |
-| `originalFileId`   | `Edm.String`              | No  | No         | Yes        | Yes      | Yes       | SHA256 hash (truncated) of original filename + size. Used for grouping/deleting chunks.                |
+| `originalFileId`   | `Edm.String`              | No  | No         | Yes        | Yes      | Yes       | SHA256 hash (truncated) of projectId + original filename + size. Used for grouping/deleting chunks.                |
+| `projectId`        | `Edm.String`              | No  | No         | Yes        | No       | No        | Identifier for the project this document belongs to. Used for filtering.                                |
 | `title` *          | `Edm.String`              | No  | Yes        | Yes        | Yes      | Yes       | Document title. Searched in `lib/ai/search.ts` but not explicitly indexed by `sources/route.ts`.      |
 | `category` *       | `Edm.String`              | No  | Yes        | Yes        | Yes      | Yes       | Document category. Used in `seed-index.js` but not explicitly indexed by `sources/route.ts`.            |
 
