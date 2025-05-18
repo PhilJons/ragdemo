@@ -85,18 +85,22 @@ export async function POST(request: Request) {
   try {
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
+    const projectId = formData.get('projectId') as string | null; // Read projectId
 
     if (!file) {
       return NextResponse.json({ success: false, error: 'No file uploaded.' }, { status: 400 });
     }
+    if (!projectId) {
+      return NextResponse.json({ success: false, error: 'Project ID is required for uploading source.' }, { status: 400 });
+    }
 
-    console.log(`Processing uploaded file: ${file.name}, Type: ${file.type}, Size: ${file.size}`);
+    console.log(`Processing uploaded file: ${file.name} for project: ${projectId}`);
 
     const fileBuffer = Buffer.from(await file.arrayBuffer());
     let fileContent = '';
 
     // --- Step 1: Upload to Blob Storage ---
-    const uniqueBlobName = `${Date.now()}_${file.name}`;
+    const uniqueBlobName = `${projectId}_${Date.now()}_${file.name}`; // Potentially prefix blob with projectId for organization
     const blockBlobClient = containerClient.getBlockBlobClient(uniqueBlobName);
     console.log(`Uploading to Blob storage as blob: ${uniqueBlobName}`);
     await blockBlobClient.uploadData(fileBuffer);
@@ -196,7 +200,9 @@ export async function POST(request: Request) {
 
     // --- Step 3: Chunking (if content exists) ---
     if (!fileContent || fileContent.trim().length === 0) {
-      console.log('File content is empty or could not be extracted. Skipping indexing.');
+      console.log('File content is empty. Skipping indexing.');
+      // Clean up the temporary blob even if no content
+      await blockBlobClient.deleteIfExists();
       return NextResponse.json({ success: true, message: `File '${file.name}' processed, but no content extracted for indexing.` });
     }
 
@@ -204,23 +210,27 @@ export async function POST(request: Request) {
     const textChunks = chunkText(fileContent);
     console.log(`Content split into ${textChunks.length} chunks.`);
 
-    // --- Step 4: Process and Upload Chunks to Azure Search ---
-    // ... (embedding and document creation logic as before) ...
-     const documentsToUpload = [];
-    const originalFileId = createHash('sha256').update(file.name + file.size).digest('hex').substring(0, 16);
+    // --- Step 4: Process and Create Documents for Azure Search ---
+    const documentsToUpload = [];
+    const originalFileId = createHash('sha256').update(projectId + file.name + file.size).digest('hex').substring(0, 24); // Include projectId in hash for uniqueness
 
     for (let i = 0; i < textChunks.length; i++) {
       const chunk = textChunks[i];
       console.log(`Processing chunk ${i + 1}/${textChunks.length}...`);
       const embedding = await generateEmbedding(chunk);
       const chunkId = `${originalFileId}_chunk_${i}`;
+      
+      // We'll keep the projectId prefix in sourcefile for compatibility
+      // but also add the explicit projectId field
+      const projectPrefixedSourcefile = `${projectId}/${file.name}`;
+      
       const document = {
         id: chunkId,
         content: chunk,
         embedding: embedding,
-        sourcefile: file.name,
-        // chunkNumber: i, 
-        originalFileId: originalFileId
+        sourcefile: projectPrefixedSourcefile,
+        originalFileId: originalFileId,
+        projectId: projectId // Add explicit projectId field
       };
       documentsToUpload.push(document);
     }
@@ -234,67 +244,79 @@ export async function POST(request: Request) {
       const failedCount = result.results.filter(r => !r.succeeded).length;
       if (failedCount === 0) {
         console.log("All document chunks uploaded successfully.");
-        return NextResponse.json({ success: true, message: `File '${file.name}' processed and indexed (${documentsToUpload.length} chunks).`, originalFileId: originalFileId });
+        return NextResponse.json({ success: true, message: `File '${file.name}' processed and indexed for project ${projectId}.`, originalFileId: originalFileId });
       } else {
         console.error(`Failed to upload ${failedCount} out of ${documentsToUpload.length} document chunks.`);
         const firstError = result.results.find(r => !r.succeeded);
-        return NextResponse.json({ success: false, error: `Failed to index some document chunks. First error: ${firstError?.errorMessage}` }, { status: 500 });
+        return NextResponse.json({ success: false, error: `Failed to index some chunks for project ${projectId}. Error: ${firstError?.errorMessage}` }, { status: 500 });
       }
     } else {
       console.log("No document chunks generated after processing.");
-      return NextResponse.json({ success: true, message: `File '${file.name}' processed, but no content chunks were generated for indexing.` });
+      return NextResponse.json({ success: true, message: `File '${file.name}' processed for project ${projectId}, but no content chunks generated.` });
     }
 
   } catch (error: any) {
     console.error('Error processing file upload:', error);
-    return NextResponse.json({ success: false, error: `An unexpected error occurred during file processing: ${error.message}` }, { status: 500 });
+    return NextResponse.json({ success: false, error: `An unexpected error occurred: ${error.message}` }, { status: 500 });
   }
 } // --- END ORIGINAL POST HANDLER LOGIC ---
 
 // GET handler to list current sources
 export async function GET(request: Request) {
-  try {
-    console.log("Fetching and grouping sources from index...");
-    const searchResults = await searchClient.search("*", {
-      // Select fields needed for display and grouping
-      select: ["id", "sourcefile", "originalFileId"], 
-      top: 1000 // Adjust as needed, but ensure all chunks of a file are likely fetched
-    });
+  const { searchParams } = new URL(request.url);
+  const projectId = searchParams.get('projectId');
 
-    const uniqueSourcesMap = new Map<string, { id: string, name: string }>();
-    let documentCount = 0; // Initialize counter
+  if (!projectId) {
+    return NextResponse.json({ success: false, error: 'Project ID is required to fetch sources.' }, { status: 400 });
+  }
+
+  try {
+    console.log(`Fetching sources for project: ${projectId} from index...`);
+    
+    const searchOptions: any = {
+      select: ["id", "sourcefile", "originalFileId", "projectId"],
+      top: 1000 
+    };
+
+    let searchResults;
+    try {
+      // Try with projectId field first
+      searchOptions.filter = `projectId eq '${projectId}'`;
+      searchResults = await searchClient.search("*", searchOptions);
+    } catch (error: any) {
+      console.warn(`Error using projectId field, falling back to sourcefile filtering: ${error.message}`);
+      // Fall back to sourcefile pattern matching
+      searchOptions.filter = `search.ismatchscoring('${projectId}', 'sourcefile')`;
+      searchResults = await searchClient.search("*", searchOptions);
+    }
+
+    const uniqueSourcesMap = new Map<string, { id: string, name: string, projectId: string }>();
 
     for await (const result of searchResults.results) {
-      documentCount++; // Increment counter
       const doc = result.document as any;
-      
-      // Use originalFileId as the key for grouping
       if (doc && typeof doc.originalFileId === 'string' && typeof doc.sourcefile === 'string') {
-        // If we haven't seen this originalFileId yet, add it to the map
+        // Check if there's a projectId field or parse it from sourcefile
+        const docProjectId = doc.projectId || projectId; // Use the field if available, otherwise use the requested projectId
+        
         if (!uniqueSourcesMap.has(doc.originalFileId)) {
           uniqueSourcesMap.set(doc.originalFileId, { 
-            // Use originalFileId for the ID in the UI for deletion purposes
             id: doc.originalFileId, 
-            name: doc.sourcefile 
+            name: doc.sourcefile,
+            projectId: docProjectId
           });
         }
       } else {
-          // Log documents missing the crucial fields
-          console.warn("Skipping document missing originalFileId or sourcefile:", doc);
+        console.warn("Skipping document missing required fields:", doc);
       }
     }
     
-    // Convert the map values to an array for the response
     const sources = Array.from(uniqueSourcesMap.values());
-
-    console.log(`Fetched ${documentCount} documents, returning ${sources.length} unique sources.`); // Use counter in log
+    console.log(`Fetched ${sources.length} unique sources for project ${projectId}.`);
     return NextResponse.json({ success: true, sources: sources });
 
   } catch (error: any) {
-    console.error('Error fetching sources:', error);
-    // Be more specific about the error returned to the client if needed
-    // Check if it's an Azure SDK error, etc.
-    return NextResponse.json({ success: false, error: `An error occurred while fetching sources: ${error.message}` }, { status: 500 });
+    console.error(`Error fetching sources for project ${projectId}:`, error);
+    return NextResponse.json({ success: false, error: `Error fetching sources: ${error.message}` }, { status: 500 });
   }
 }
 

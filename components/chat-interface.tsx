@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useChat, type Message } from "ai/react";
 import { useRef, useEffect, useState, useCallback } from "react";
-import { Moon, Send, Sun, X, Settings } from "lucide-react";
+import { Moon, Send, Sun, X, Settings, ChevronDown, PlusCircle } from "lucide-react";
 import { useTheme } from "next-themes";
 import MessageContainer from "./message-container";
 import {
@@ -19,69 +19,25 @@ import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerDescription, Dr
 import SettingsDialog from "./settings-dialog";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import LoginButton from "@/components/auth/LoginButton";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { DEFAULT_SYSTEM_PROMPTS, type SystemPrompt } from "@/lib/prompt-constants";
+import CreateProjectDialog from "./create-project-dialog";
 
-// --- System Prompt Types and Constants ---
-interface SystemPrompt {
+// --- SystemPrompt interface and DEFAULT_SYSTEM_PROMPTS are MOVED to lib/prompt-constants.ts ---
+// Will import them later
+
+// --- Type for Project (matching API response from GET /api/projects) ---
+interface Project {
+  id: string;
   name: string;
-  content: string;
+  description?: string | null;
+  activeProjectPromptId?: string | null;
+  activeGlobalPromptName?: string | null;
+  temperature?: number | null;
+  maxTokens?: number | null;
+  activeProjectPrompt?: { id: string; name: string; content: string; } | null; 
 }
-
-const SYSTEM_PROMPTS_LOCAL_STORAGE_KEY = 'customSystemPrompts';
-
-const DEFAULT_SYSTEM_PROMPTS: SystemPrompt[] = [
-  {
-    name: "Default Financial Analyst",
-    content: `You are StrategyGPT, an expert strategic-analysis assistant.
-Your sole knowledge source is the **context documents** supplied via Retrieval-Augmented Generation (RAG).  Each document chunk is annotated with a unique identifier in the form \`[Source ID: <ID>]\` and includes metadata such as *sourcefile* (the file name) and *title*.
-
-====================  CORE BEHAVIOUR  ====================
-1. Grounded answers only – never rely on external or prior knowledge.  If the context is insufficient, reply with:  
-   "I cannot answer this question based on the provided information."
-
-2. Inline citations – Every factual statement **must** be followed immediately by the source id(s) in square brackets, e.g. *Strategic alliances grew 45 % in 2023* [Source ID: doc17_chunk3].  Use **multiple ids** when synthesising several snippets.
-
-3. Structured & executive-ready output – Use Markdown with clear headings.  Employ tables, numbered / bulleted lists and call-out blocks where helpful.
-
-====================  ADVANCED TASKS SUPPORTED  ====================
-You can perform any of the following on the provided material:
-• Competitive benchmarking & trend analysis over time.  
-• SWOT or gap analyses combining internal (e.g., \`internal-strategy_2023-Q4.md\`) and external reports.  
-• Campaign post-mortems: list success drivers & improvement areas.  
-• Multi-document aggregation: merge insights from diverse research papers into a single narrative.  
-• Meeting prep digests: surface the five most relevant points for a given agenda.  
-• Personalised retrieval: answer questions that reference specific projects, clients, or file names.
-
-====================  HOW TO REASON WITH FILE NAMES  ====================
-• Whenever a query mentions a **file name, title, or obvious alias**, treat it as a search cue.  
-• If the context includes file-name metadata, prefer chunks originating from files whose name closely matches the user query.
-
-====================  RESPONSE TEMPLATE GUIDANCE  ====================
-1. *(Optional)* **Brief Answer / TL;DR** – one-sentence takeaway.  
-2. **Detailed Analysis** – use subsections per theme (e.g., *Competitor Trends*, *Opportunities*, *SWOT Table*).  
-3. **Recommended Actions** – concise bullet list (when the user request calls for it).  
-4. **Sources** – If not already inline, end with a "Sources" section containing all ids used.
-
-Remember: clarity, brevity, and rigorous sourcing are paramount.`
-  },
-  {
-    name: "Boilerplate System Prompt",
-    content: `--- Who will receive this (audience) ---
-(e.g., "Portfolio managers", "Investment committee", "Equity research team")
-
---- Background information ---
-(e.g., "Analyzing quarterly earnings reports from several tech companies.", "Tracking analyst sentiment changes for a specific stock based on multiple research notes.")
-
---- Task definition, what you expect it to do, the vision ---
-(e.g., "Summarize shifts in analyst ratings and price targets across the provided reports.", "Extract key themes and forward-looking statements from earnings call transcripts.", "Compare research house views on a company, highlighting changes over time and consensus points.")
-
---- Examples of good outputs (optional) ---
-(e.g., "Imagine a previous analysis you liked – you can paste a snippet of its output here.", "Provide a full example text of a desired summary here.")
-
---- Desired output structure (optional) ---
-(e.g., "A report with: 1. Executive TLDR (3-5 bullets). 2. Detailed breakdown by research house, showing report date, rating, price target, and key commentary. 3. Appendix listing sources.", "Output similar to the default financial analyst prompt\'s structure.", "Main sections: 'Overall Sentiment Shift', 'Key Themes by Research House', 'Price Target Evolution'.", "Output a list of key forecast changes with analyst justifications.")`
-  }
-];
-// --- End System Prompt Types and Constants ---
 
 // Custom components for Markdown rendering
 const MarkdownComponents = {
@@ -204,31 +160,34 @@ export default function ChatInterface() {
   const [isAtBottom, setIsAtBottom] = useState(true);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // --- System Prompt State ---
-  const [systemPrompts, setSystemPrompts] = useState<SystemPrompt[]>(DEFAULT_SYSTEM_PROMPTS);
-  const [selectedPromptName, setSelectedPromptName] = useState<string>(DEFAULT_SYSTEM_PROMPTS[0]?.name || "");
-  const [selectedSystemPromptContent, setSelectedSystemPromptContent] = useState<string>(DEFAULT_SYSTEM_PROMPTS[0]?.content || "");
-  const [defaultPromptNames, setDefaultPromptNames] = useState<string[]>(DEFAULT_SYSTEM_PROMPTS.map(p => p.name));
-  // --- End System Prompt State ---
+  // --- Project Management State ---
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [isLoadingProjects, setIsLoadingProjects] = useState<boolean>(true);
+  const [activeChatProjectId, setActiveChatProjectId] = useState<string | null>(null);
+  const [activeProjectFullSettings, setActiveProjectFullSettings] = useState<Project | null>(null);
 
-  // New state for Temperature and Max Tokens
-  const [temperature, setTemperature] = useState<number>(0.7); // Default temperature
-  const [maxTokens, setMaxTokens] = useState<number>(2000); // Default max tokens
+  // --- Global/Default System Prompt State (Fallback if no project/project setting) ---
+  // These will be initialized from the imported DEFAULT_SYSTEM_PROMPTS
+  const [systemPrompts, setSystemPrompts] = useState<any[]>([]); // Use any temporarily
+  const [selectedPromptName, setSelectedPromptName] = useState<string>("");
+  const [defaultPromptNames, setDefaultPromptNames] = useState<string[]>([]);
+  
+  const [globalTemperature] = useState<number>(0.7);
+  const [globalMaxTokens] = useState<number>(2000);
+
+  const [currentChatTemperature, setCurrentChatTemperature] = useState<number>(globalTemperature);
+  const [currentChatMaxTokens, setCurrentChatMaxTokens] = useState<number>(globalMaxTokens);
+  const [currentChatSystemPromptContent, setCurrentChatSystemPromptContent] = useState<string>("");
 
   const { 
-    messages, 
-    input, 
-    handleInputChange, 
-    handleSubmit, 
-    isLoading, 
-    data,
-    setMessages
+    messages, input, handleInputChange, handleSubmit, isLoading, data, setMessages
   } = useChat({
     api: '/api/chat',
     body: {
-      selectedSystemPromptContent: selectedSystemPromptContent,
-      temperature,
-      maxTokens,
+      selectedSystemPromptContent: currentChatSystemPromptContent,
+      temperature: currentChatTemperature,
+      maxTokens: currentChatMaxTokens,
+      projectId: activeChatProjectId, 
     },
     onError: (error: any) => {
       console.error("API Error:", error); // Log the error
@@ -254,89 +213,93 @@ export default function ChatInterface() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const citationPanelRef = useRef<ImperativePanelHandle>(null);
 
-  // --- Load and Manage System Prompts ---
+  // Add state for the create project dialog
+  const [isCreateProjectDialogOpen, setIsCreateProjectDialogOpen] = useState(false);
+
+  // Initialize global/default prompts once from constants (when they are imported)
   useEffect(() => {
-    try {
-      const storedPrompts = localStorage.getItem(SYSTEM_PROMPTS_LOCAL_STORAGE_KEY);
-      if (storedPrompts) {
-        const customPrompts: SystemPrompt[] = JSON.parse(storedPrompts);
-        // Filter out any default prompts that might have been saved by mistake
-        const uniqueCustomPrompts = customPrompts.filter(cp => !DEFAULT_SYSTEM_PROMPTS.some(dp => dp.name === cp.name));
-        setSystemPrompts([...DEFAULT_SYSTEM_PROMPTS, ...uniqueCustomPrompts]);
-      } else {
-        setSystemPrompts(DEFAULT_SYSTEM_PROMPTS);
+    // This will be populated once DEFAULT_SYSTEM_PROMPTS is imported
+    // For now, systemPrompts will be empty, then set by import later
+    // setSystemPrompts(IMPORTED_DEFAULT_SYSTEM_PROMPTS);
+    // setSelectedPromptName(IMPORTED_DEFAULT_SYSTEM_PROMPTS[0]?.name || "");
+    // setDefaultPromptNames(IMPORTED_DEFAULT_SYSTEM_PROMPTS.map(p => p.name));
+  }, []); // Empty dependency array, runs once
+
+  // Fetch projects on component mount
+  useEffect(() => {
+    const fetchUserProjects = async () => {
+      setIsLoadingProjects(true);
+      try {
+        const response = await fetch('/api/projects');
+        if (!response.ok) throw new Error('Failed to fetch projects');
+        const userProjects: Project[] = await response.json();
+        setProjects(userProjects);
+        if (userProjects.length > 0 && !activeChatProjectId) {
+          // Default to the first project if none is active
+          // Or load from localStorage if you implement a preference
+          setActiveChatProjectId(userProjects[0].id);
+        }
+      } catch (err) {
+        console.error("Error fetching projects:", err);
+        // setError("Could not load your projects."); // Optional: user-facing error
+      } finally {
+        setIsLoadingProjects(false);
       }
-    } catch (e) {
-      console.error("Failed to load or parse custom prompts from LocalStorage:", e);
-      setSystemPrompts(DEFAULT_SYSTEM_PROMPTS); // Fallback to defaults
-    }
-  }, []);
+    };
+    fetchUserProjects();
+  }, [activeChatProjectId]); // Added activeChatProjectId to dependency array
 
+  // Update activeProjectFullSettings and chat settings when activeChatProjectId or projects list changes
   useEffect(() => {
-    // Update content when name changes
-    const currentPrompt = systemPrompts.find(p => p.name === selectedPromptName);
-    setSelectedSystemPromptContent(currentPrompt?.content || DEFAULT_SYSTEM_PROMPTS[0]?.content || "");
-  }, [selectedPromptName, systemPrompts]);
+    if (activeChatProjectId && projects.length > 0) {
+      const currentProject = projects.find(p => p.id === activeChatProjectId);
+      setActiveProjectFullSettings(currentProject || null);
 
-  const handleSelectPrompt = (name: string) => {
+      if (currentProject) {
+        // Determine system prompt content
+        let promptContentToUse = DEFAULT_SYSTEM_PROMPTS[0]?.content || ""; // Fallback
+        if (currentProject.activeProjectPromptId && currentProject.activeProjectPrompt?.content) {
+          promptContentToUse = currentProject.activeProjectPrompt.content;
+        } else if (currentProject.activeGlobalPromptName) {
+          const globalPrompt = DEFAULT_SYSTEM_PROMPTS.find((p: SystemPrompt) => p.name === currentProject.activeGlobalPromptName);
+          if (globalPrompt) promptContentToUse = globalPrompt.content;
+        } else {
+          // Fallback to the globally selected prompt in ChatInterface (if maintaining that concept)
+          // Or just use the first default if no specific project prompt is set.
+          const globalFallback = DEFAULT_SYSTEM_PROMPTS.find((p: SystemPrompt) => p.name === selectedPromptName) || DEFAULT_SYSTEM_PROMPTS[0];
+          if (globalFallback) promptContentToUse = globalFallback.content;
+        }
+        setCurrentChatSystemPromptContent(promptContentToUse);
+        setCurrentChatTemperature(currentProject.temperature ?? globalTemperature);
+        setCurrentChatMaxTokens(currentProject.maxTokens ?? globalMaxTokens);
+      } else {
+         // Active project ID set, but project not found in list (should not happen often)
+        setCurrentChatSystemPromptContent(DEFAULT_SYSTEM_PROMPTS[0]?.content || "");
+        setCurrentChatTemperature(globalTemperature);
+        setCurrentChatMaxTokens(globalMaxTokens);
+      }
+    } else if (!activeChatProjectId) {
+      // No project selected, use global defaults
+      setActiveProjectFullSettings(null);
+      const globalFallback = DEFAULT_SYSTEM_PROMPTS.find((p: SystemPrompt) => p.name === selectedPromptName) || DEFAULT_SYSTEM_PROMPTS[0];
+      setCurrentChatSystemPromptContent(globalFallback?.content || "");
+      setCurrentChatTemperature(globalTemperature);
+      setCurrentChatMaxTokens(globalMaxTokens);
+    }
+  }, [activeChatProjectId, projects, selectedPromptName, globalTemperature, globalMaxTokens]);
+  
+  // Update selectedSystemPromptContent based on selectedPromptName (global fallback selection)
+  // This is less critical now that project settings drive the prompt
+  useEffect(() => {
+    if (!activeChatProjectId) { // Only use this if no project is active
+      const selectedGlobalPrompt = systemPrompts.find((p: SystemPrompt) => p.name === selectedPromptName);
+      setCurrentChatSystemPromptContent(selectedGlobalPrompt?.content || DEFAULT_SYSTEM_PROMPTS[0]?.content || "");
+    }
+  }, [selectedPromptName, systemPrompts, activeChatProjectId]);
+
+  const handleSelectGlobalPrompt = (name: string) => {
     setSelectedPromptName(name);
-    // Optional: Clear chat history when prompt changes?
-    // setMessages([]); 
-    // console.log(`Switched to system prompt: ${name}. Chat history cleared.`);
   };
-
-  const handleAddNewPrompt = (name: string, content: string) => {
-    if (systemPrompts.some(p => p.name === name)) {
-      alert("A prompt with this name already exists. Please choose a unique name.");
-      return;
-    }
-    const newPrompt: SystemPrompt = { name, content };
-    const updatedPrompts = [...systemPrompts, newPrompt];
-    setSystemPrompts(updatedPrompts);
-    const customPromptsToSave = updatedPrompts.filter(p => !DEFAULT_SYSTEM_PROMPTS.some(dp => dp.name === p.name));
-    localStorage.setItem(SYSTEM_PROMPTS_LOCAL_STORAGE_KEY, JSON.stringify(customPromptsToSave));
-    setSelectedPromptName(name); // Optionally select the new prompt
-  };
-
-  const handleUpdatePrompt = (originalName: string, newName: string, newContent: string) => {
-    if (newName !== originalName && systemPrompts.some(p => p.name === newName)) {
-      alert("A prompt with the new name already exists. Please choose a unique name.");
-      return;
-    }
-    const updatedPrompts = systemPrompts.map(p => 
-      p.name === originalName ? { name: newName, content: newContent } : p
-    );
-    setSystemPrompts(updatedPrompts);
-    const customPromptsToSave = updatedPrompts.filter(p => !DEFAULT_SYSTEM_PROMPTS.some(dp => dp.name === p.name));
-    localStorage.setItem(SYSTEM_PROMPTS_LOCAL_STORAGE_KEY, JSON.stringify(customPromptsToSave));
-    if (selectedPromptName === originalName) {
-      setSelectedPromptName(newName);
-    }
-  };
-
-  const handleDeletePrompt = (name: string) => {
-    if (DEFAULT_SYSTEM_PROMPTS.some(dp => dp.name === name)) {
-      alert("Default prompts cannot be deleted.");
-      return;
-    }
-    const updatedPrompts = systemPrompts.filter(p => p.name !== name);
-    setSystemPrompts(updatedPrompts);
-    const customPromptsToSave = updatedPrompts.filter(p => !DEFAULT_SYSTEM_PROMPTS.some(dp => dp.name === p.name));
-    localStorage.setItem(SYSTEM_PROMPTS_LOCAL_STORAGE_KEY, JSON.stringify(customPromptsToSave));
-    if (selectedPromptName === name) {
-      setSelectedPromptName(DEFAULT_SYSTEM_PROMPTS[0]?.name || ""); // Revert to default
-    }
-  };
-  // --- End Load and Manage System Prompts ---
-
-  // expand the right panel when a citation is selected
-  useEffect(() => {
-    if (currentCitation) {
-      citationPanelRef.current?.expand();
-    } else {
-      citationPanelRef.current?.collapse();
-    }
-  }, [currentCitation]);
 
   // Process source documents from the data stream
   useEffect(() => {
@@ -761,18 +724,58 @@ export default function ChatInterface() {
     return dataText;
   };
 
+  // Add function to handle project creation
+  const handleProjectCreated = (newProject: { id: string; name: string }) => {
+    setProjects(prev => [...prev, newProject]);
+    setActiveChatProjectId(newProject.id);
+  };
+
   return (
     <>
       <ResizablePanelGroup direction="horizontal">
         <ResizablePanel id="chat-panel">
           <div className="flex flex-col min-w-0 h-screen bg-background">
             <div className="flex flex-row justify-between items-center p-4">
-              <div className="flex items-center space-x-4">
+              <div className="flex items-center space-x-2 sm:space-x-4">
                 <ThemeChanger />
-                <Button variant="ghost" size="icon" onClick={() => setIsSettingsOpen(true)} title="Data Source Settings">
+                <Button variant="ghost" size="icon" onClick={() => setIsSettingsOpen(true)} title="Settings">
                   <Settings className="h-[1.2rem] w-[1.2rem]" />
-                  <span className="sr-only">Data Settings</span>
+                  <span className="sr-only">Settings</span>
                 </Button>
+                {/* Active Project Selector */} 
+                {projects.length > 0 && (
+                  <Select 
+                    value={activeChatProjectId || "no-project"}
+                    onValueChange={(value) => {
+                      // Handle the special "create-new" value
+                      if (value === "create-new") {
+                        setIsCreateProjectDialogOpen(true);
+                        return;
+                      }
+                      setActiveChatProjectId(value === "no-project" ? null : value);
+                    }}
+                  >
+                    <SelectTrigger className="w-[180px] md:w-[250px] text-xs md:text-sm h-9">
+                      <SelectValue placeholder="Select Active Project" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="no-project"><em>No Active Project (Global)</em></SelectItem>
+                      {projects.map(proj => (
+                        <SelectItem key={proj.id} value={proj.id}>{proj.name}</SelectItem>
+                      ))}
+                      <SelectItem value="create-new" className="text-primary">
+                        <div className="flex items-center">
+                          <PlusCircle className="mr-2 h-4 w-4" />
+                          <span>Create New Project</span>
+                        </div>
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+                {isLoadingProjects && <p className="text-xs text-muted-foreground">Loading projects...</p>}
+              </div>
+              <div className="flex items-center">
+                <LoginButton />
               </div>
             </div>
             <div className="text-center mb-4 md:mb-8">
@@ -857,16 +860,20 @@ export default function ChatInterface() {
         onOpenChange={setIsSettingsOpen}
         systemPrompts={systemPrompts}
         selectedPromptName={selectedPromptName}
-        onSelectPrompt={handleSelectPrompt}
-        onAddNewPrompt={handleAddNewPrompt}
-        onUpdatePrompt={handleUpdatePrompt}
-        onDeletePrompt={handleDeletePrompt}
+        onSelectPrompt={handleSelectGlobalPrompt}
         defaultPromptNames={defaultPromptNames}
         isLoadingChat={isLoading}
-        temperature={temperature}
-        onTemperatureChange={setTemperature}
-        maxTokens={maxTokens}
-        onMaxTokensChange={setMaxTokens}
+        temperature={globalTemperature}
+        onTemperatureChange={() => {}}
+        maxTokens={globalMaxTokens}
+        onMaxTokensChange={() => {}}
+        currentProjectId={activeChatProjectId}
+      />
+
+      <CreateProjectDialog 
+        isOpen={isCreateProjectDialogOpen} 
+        onOpenChange={setIsCreateProjectDialogOpen}
+        onProjectCreated={handleProjectCreated}
       />
 
     </>
