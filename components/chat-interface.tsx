@@ -154,7 +154,7 @@ export default function ChatInterface() {
   const [toolCall, setToolCall] = useState<string>();
   const [error, setError] = useState<string | null>(null);
   const [documentMap, setDocumentMap] = useState<Record<string, { text: string; sourcefile: string }>>({});
-  const [currentCitation, setCurrentCitation] = useState<string | null>(null);
+  const [currentCitation, setCurrentCitation] = useState<{ id: string; text: string; sourcefile: string } | null>(null);
   const [isCitationShown, setIsCitationShown] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
@@ -356,9 +356,8 @@ export default function ChatInterface() {
     handleSubmit(event);
   };
 
-  const showCitation = (id: string) => {
-    const citationText = documentMap[id]?.text || null;
-    setCurrentCitation(citationText);
+  const showCitation = (citation: { id: string; text: string; sourcefile: string }) => {
+    setCurrentCitation(citation);
     setIsCitationShown(true);
   };
 
@@ -821,8 +820,12 @@ export default function ChatInterface() {
             <div className="p-4">
               {currentCitation ? (
                 <div className="prose prose-sm max-w-none text-foreground dark:text-gray-100">
+                  <div className="mb-2 p-2 rounded bg-gray-50 dark:bg-gray-900/40 border border-gray-200 dark:border-gray-700">
+                    <div><strong>File:</strong> {currentCitation.sourcefile.split('/').pop()}</div>
+                    <div><strong>Source ID:</strong> {currentCitation.id}</div>
+                  </div>
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>
-                    {formatCitationAsMarkdown(currentCitation)}
+                    {formatCitationAsMarkdown(currentCitation.text)}
                   </ReactMarkdown>
                 </div>
               ) : (
@@ -840,8 +843,12 @@ export default function ChatInterface() {
             <DrawerDescription className="h-[50vh] overflow-y-auto">
               {currentCitation ? (
                 <div className="prose prose-sm max-w-none text-foreground dark:text-gray-100">
+                  <div className="mb-2 p-2 rounded bg-gray-50 dark:bg-gray-900/40 border border-gray-200 dark:border-gray-700">
+                    <div><strong>File:</strong> {currentCitation.sourcefile.split('/').pop()}</div>
+                    <div><strong>Source ID:</strong> {currentCitation.id}</div>
+                  </div>
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>
-                    {formatCitationAsMarkdown(currentCitation)}
+                    {formatCitationAsMarkdown(currentCitation.text)}
                   </ReactMarkdown>
                 </div>
               ) : (

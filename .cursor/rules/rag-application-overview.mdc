@@ -1,0 +1,62 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# RAG Application Overview
+
+This document outlines the core functionality, user flow, and prompt management system for the RAG (Retrieval Augmented Generation) application.
+
+## Core Functionality
+
+The application serves as a RAG system, allowing users to ask questions and receive answers grounded in a knowledge base of uploaded documents. Key features include:
+
+1.  **Project-Based Document Management:** Users can create projects and upload documents specific to each project.
+2.  **Customizable Prompts:** The RAG's behavior is guided by system prompts. Users can create and manage these prompts.
+3.  **AI-Assisted Prompt Generation:** A special function, [structureUserInputsIntoSystemPrompt.ts](mdc:app/actions/structureUserInputsIntoSystemPrompt.ts), helps users create high-quality system prompts by taking their raw input and structuring it using an AI model.
+4.  **Source Citations:** The RAG is designed to cite the sources of its information within its responses. Clickable citations should open a side panel displaying the relevant chunk/section from the source document.
+
+## User Flow
+
+1.  **Project Selection/Creation:**
+    *   Users select an existing project or create a new one.
+    *   Documents can be uploaded to the selected project, forming its knowledge base.
+2.  **Prompt Management (Settings Panel):**
+    *   Users can access a settings panel for the selected project.
+    *   **Manual Prompt Creation:** Users can write system prompts manually.
+    *   **AI-Assisted Prompt Creation ("My Prompt" Button):**
+        *   User provides raw input/ideas for a system prompt.
+        *   This input is processed by the `structureUserInputsIntoSystemPromptAction` in [structureUserInputsIntoSystemPrompt.ts](mdc:app/actions/structureUserInputsIntoSystemPrompt.ts).
+        *   The action uses a "Prompt Generation AI" (guided by a `META_PROMPT` within the action file) to generate a well-structured, effective system prompt.
+        *   This generated prompt is saved and can be selected by the user for the project.
+    *   **Default Prompts:** The application also provides a set of default system prompts (defined in [lib/prompt-constants.ts](mdc:lib/prompt-constants.ts)) that can be used if no custom project prompt is selected.
+3.  **Chat Interaction:**
+    *   Users ask questions within the chat interface for a selected project.
+    *   The backend API ([app/(preview)/api/chat/route.ts](mdc:app/(preview)/api/chat/route.ts)) handles the request:
+        *   It determines the active system prompt (project-specific, globally selected default, or absolute default).
+        *   It retrieves relevant content chunks from the project's knowledge base using [lib/ai/search.ts](mdc:lib/ai/search.ts). These chunks include an `id`, `text` (content), and `sourcefile`.
+        *   It injects these chunks (with their IDs and sourcefiles) as context into the prompt for the LLM.
+        *   The LLM generates a response based on the user's question and the provided context, guided by the active system prompt.
+4.  **Response and Citations:**
+    *   The LLM's response is displayed in the chat.
+    *   The system prompt instructs the LLM to include citations in the format `[Source ID: <ID_VALUE>]`.
+    *   The frontend ([components/message-container.tsx](mdc:components/message-container.tsx) and [components/chat-interface.tsx](mdc:components/chat-interface.tsx)) parses these `[Source ID: <ID_VALUE>]` markers.
+    *   Clicking a citation should trigger a side panel (defined in [components/chat-citations.tsx](mdc:components/chat-citations.tsx) but orchestrated by [components/chat-interface.tsx](mdc:components/chat-interface.tsx)) to display the `text` and `sourcefile` of the cited document chunk. The `documentMap` state variable in `ChatInterface` holds the mapping from `ID_VALUE` to the full citation details.
+
+## Key Files & Components
+
+*   **Prompt Generation Action:** [app/actions/structureUserInputsIntoSystemPrompt.ts](mdc:app/actions/structureUserInputsIntoSystemPrompt.ts) (contains the `META_PROMPT` for generating RAG system prompts)
+*   **Default System Prompts:** [lib/prompt-constants.ts](mdc:lib/prompt-constants.ts)
+*   **Chat API Endpoint:** [app/(preview)/api/chat/route.ts](mdc:app/(preview)/api/chat/route.ts) (handles RAG logic, context retrieval, LLM call)
+*   **Content Retrieval (Azure AI Search):** [lib/ai/search.ts](mdc:lib/ai/search.ts)
+*   **Main Chat UI Orchestration:** [components/chat-interface.tsx](mdc:components/chat-interface.tsx) (manages chat state, including selected citations and side panel visibility)
+*   **Message Rendering & Citation Parsing:** [components/message-container.tsx](mdc:components/message-container.tsx) (renders individual messages and handles clickable citation spans)
+*   **Citation Side Panel Display:** [components/chat-citations.tsx](mdc:components/chat-citations.tsx) (displays the content of a selected citation - though largely superseded by logic within `ChatInterface.tsx` for panel display)
+*   **Old/Alternative Chat Messages (potentially unused):** [components/chat/chat-messages.tsx](mdc:components/chat/chat-messages.tsx)
+
+## Critical Citation Logic
+
+The system is designed to ensure that citations are in the format `[Source ID: <ID_VALUE>]`. This specific format is:
+1.  Instructed to the RAG LLM via the active system prompt (either a default one or one generated by `structureUserInputsIntoSystemPromptAction`).
+2.  Expected by the frontend parser in [components/message-container.tsx](mdc:components/message-container.tsx) to make citations clickable and display the side panel.
+3.  The `META_PROMPT` in [app/actions/structureUserInputsIntoSystemPrompt.ts](mdc:app/actions/structureUserInputsIntoSystemPrompt.ts) is critical for ensuring that even user-customized prompts (generated via AI) adhere to this strict citation format and do not introduce other linking mechanisms like `(PDF-url#page)`.
