@@ -11,7 +11,7 @@ interface MessageContainerProps {
   error: string | null;
   toolCall: string | undefined;
   isLoading: boolean;
-  showCitation: (id: string) => void;
+  showCitation: (citation: { id: string; text: string; sourcefile: string }) => void;
   messagesEndRef: React.RefObject<HTMLDivElement>;
   documentMap: Record<string, { text: string; sourcefile: string }>;
   scrollContainerRef: React.RefObject<HTMLDivElement>;
@@ -88,43 +88,32 @@ const MarkdownComponents = {
 
 const MessageItem: React.FC<{
   message: Message;
-  showCitation: (id: string) => void;
+  showCitation: (citation: { id: string; text: string; sourcefile: string }) => void;
   documentMap: Record<string, { text: string; sourcefile: string }>;
 }> = React.memo(
   ({ message, showCitation, documentMap }) => {
     const replaceCitationFlags = (response: string): JSX.Element => {
-      const citationRegex = /\\[Source ID: (.*?)\\]/g;
+      const citationRegex = /\[Source ID: (.*?)\]/g;
 
-      if (!citationRegex.test(response)) {
-        return (
-          <div className="text-foreground dark:text-gray-100 [&_a]:!text-blue-600 [&_a]:!dark:text-white [&_strong]:!text-gray-900 [&_strong]:!dark:text-white [&_em]:!text-gray-900 [&_em]:!dark:text-white" style={{ color: 'inherit' }}>
-            <style>{`
-              [data-theme='dark'] a, .dark a { color: white !important; }
-              [data-theme='dark'] strong, .dark strong { color: white !important; }
-            `}</style>
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>
-              {response}
-            </ReactMarkdown>
-          </div>
-        );
-      }
-
+      // Split the response into segments, removing the citation pattern from the Markdown text
       const segments = response.split(citationRegex);
       const elements: JSX.Element[] = [];
       let citationIndex = 0;
 
       for (let i = 0; i < segments.length; i++) {
         if (i % 2 === 0) {
+          // Only render non-empty text segments
           if (segments[i] && segments[i].length > 0) {
             elements.push(
               <span key={`text-${i}`} className="inline [&_a]:!text-blue-600 [&_a]:!dark:text-white [&_strong]:!text-gray-900 [&_strong]:!dark:text-white [&_em]:!text-gray-900 [&_em]:!dark:text-white">
                 <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>
-                  {segments[i]}
+                  {segments[i].replace(/\[.*?\]/g, '')}
                 </ReactMarkdown>
               </span>
             );
           }
         } else {
+          // Only render the custom citation <span>, do not let Markdown see the citation pattern
           const citationId = segments[i];
           const citationData = documentMap[citationId];
           const sourcefile = citationData?.sourcefile || 'Unknown File';
@@ -132,18 +121,27 @@ const MessageItem: React.FC<{
 
           if (citationData) {
             elements.push(
-              <button
+              <span
                 key={`citation-${citationIndex++}`}
-                onClick={(e: React.MouseEvent<HTMLButtonElement>) => {
+                role="button"
+                tabIndex={0}
+                onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  showCitation(citationId);
+                  showCitation({ id: citationId, ...citationData });
                 }}
-                className="inline underline text-blue-600 dark:text-white hover:text-primary dark:hover:text-gray-300 citation font-medium px-1 rounded-sm bg-blue-100 dark:bg-blue-900/50 transition-colors"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    showCitation({ id: citationId, ...citationData });
+                  }
+                }}
+                className="inline underline text-blue-600 dark:text-white hover:text-primary dark:hover:text-gray-300 citation font-medium px-1 rounded-sm bg-blue-100 dark:bg-blue-900/50 transition-colors cursor-pointer"
                 title={`Source: ${sourcefile} (ID: ${citationId})`}
               >
-                <span>[{displayFilename}]</span>
-              </button>
+                [{displayFilename}]
+              </span>
             );
           } else {
             elements.push(
