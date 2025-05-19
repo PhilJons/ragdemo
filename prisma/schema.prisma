@@ -60,6 +60,7 @@ model Document {
   blobUri     String   @unique // URI to the blob in Azure Storage
   searchDocId String?  @unique // ID used in Azure AI Search, if different
   fileName    String
+  extractedText String?  // Full raw text extracted by Document Intelligence
   // Add other metadata fields as needed, e.g.:
   // fileType String?
   // size     Int?
