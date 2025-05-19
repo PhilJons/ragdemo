@@ -175,8 +175,9 @@ _site/
 # Local settings and environment variables files
 local.settings.json
 
-# Prisma specific generated client
-/prisma/generated/
+# Prisma specific generated client - Corrected to match output path
+# /prisma/generated/ # Old incorrect path
+generated/       # This will cover generated/prisma and any other generated content
 
 # SQLite database files
 *.sqlite
