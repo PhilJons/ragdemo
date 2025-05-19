@@ -9,6 +9,7 @@ import {
     AzureKeyCredential as DIKeyCredential 
 } from '@azure/ai-form-recognizer';
 import * as XLSX from 'xlsx'; // Import xlsx library
+import prisma from '@/lib/prisma'; // Import Prisma client
 
 // Initialize Azure Search Client (ensure environment variables are set)
 
@@ -94,36 +95,35 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: 'Project ID is required for uploading source.' }, { status: 400 });
     }
 
-    console.log(`Processing uploaded file: ${file.name} for project: ${projectId}`);
+    // Sanitize the original file name for metadata
+    const sanitizedOriginalFileName = file.name.replace(/[^a-zA-Z0-9_.-]/g, '_');
+
+    console.log(`Processing uploaded file: ${file.name} (sanitized for metadata: ${sanitizedOriginalFileName}) for project: ${projectId}`);
 
     const fileBuffer = Buffer.from(await file.arrayBuffer());
     let fileContent = '';
 
-    // --- Step 1: Upload to Blob Storage ---
-    const uniqueBlobName = `${projectId}_${Date.now()}_${file.name}`; // Potentially prefix blob with projectId for organization
+    // --- Step 1: Upload to Blob Storage (this is the final blob, not temporary) ---
+    const uniqueBlobName = `${projectId}_${Date.now()}_${sanitizedOriginalFileName}`;
     const blockBlobClient = containerClient.getBlockBlobClient(uniqueBlobName);
     console.log(`Uploading to Blob storage as blob: ${uniqueBlobName}`);
-    await blockBlobClient.uploadData(fileBuffer);
-    console.log(`Blob ${uniqueBlobName} uploaded successfully. URL: ${blockBlobClient.url}`);
+    await blockBlobClient.uploadData(fileBuffer, { metadata: { projectId: projectId, originalFileName: sanitizedOriginalFileName } });
+    const finalBlobUrl = blockBlobClient.url;
+    console.log(`Blob ${uniqueBlobName} uploaded successfully. URL: ${finalBlobUrl}`);
 
-    // --- Generate SAS token for the uploaded blob ---
+    // --- Generate SAS token for the uploaded blob for Document Intelligence ---
     const sasPermissions = new BlobSASPermissions();
-    sasPermissions.read = true; // Grant read permission for Document Intelligence
+    sasPermissions.read = true;
     const expiryDate = new Date();
-    expiryDate.setMinutes(expiryDate.getMinutes() + 15); // SAS token valid for 15 minutes
-
-    // Ensure blobServiceClient has credentials needed for SAS generation
-    // This works automatically when using fromConnectionString, assert type for TS
+    expiryDate.setMinutes(expiryDate.getMinutes() + 15);
     const sasToken = generateBlobSASQueryParameters({
         containerName: containerClient.containerName,
         blobName: blockBlobClient.name,
         permissions: sasPermissions,
-        startsOn: new Date(), // Optional: Start time
         expiresOn: expiryDate,
-        protocol: SASProtocol.Https // Enforce HTTPS
-    }, blobServiceClient.credential as StorageSharedKeyCredential).toString(); // Added type assertion
-
-    const blobUrlWithSas = `${blockBlobClient.url}?${sasToken}`;
+        protocol: SASProtocol.Https
+    }, blobServiceClient.credential as StorageSharedKeyCredential).toString();
+    const blobUrlWithSas = `${finalBlobUrl}?${sasToken}`;
     console.log(`Generated SAS URL for DI (valid for 15 mins)`);
     
     // --- Step 2: Extract Content using Document Intelligence or Specific Parsers ---
@@ -140,14 +140,9 @@ export async function POST(request: Request) {
     ];
 
     if (supportedDocIntelligenceTypes.includes(file.type)) {
-      console.log(`Analyzing document type ${file.type} with Document Intelligence: ${blockBlobClient.url}`);
-      const poller = await documentAnalysisClient.beginAnalyzeDocumentFromUrl(
-        "prebuilt-read", 
-        blobUrlWithSas // Use the SAS URL
-      );
-      console.log("Document Intelligence analysis started, waiting for results...");
+      console.log(`Analyzing document type ${file.type} with Document Intelligence: ${finalBlobUrl}`);
+      const poller = await documentAnalysisClient.beginAnalyzeDocumentFromUrl("prebuilt-read", blobUrlWithSas);
       const { content } = await poller.pollUntilDone();
-
       if (content && content.length > 0) {
         fileContent = content;
         console.log(`Document Intelligence extracted ${fileContent.length} characters.`);
@@ -194,34 +189,43 @@ export async function POST(request: Request) {
       }
     }
 
-    // Clean up the temporary blob
-    console.log(`Deleting temporary blob: ${uniqueBlobName}`);
-    await blockBlobClient.deleteIfExists(); // Enable auto-deletion
+    // **Important:** The temporary blob (which is now the final blob) is NOT deleted here 
+    // if its URL (finalBlobUrl) is to be stored in the database.
+    // The line `await blockBlobClient.deleteIfExists();` has been removed from this spot.
 
-    // --- Step 3: Chunking (if content exists) ---
     if (!fileContent || fileContent.trim().length === 0) {
-      console.log('File content is empty. Skipping indexing.');
-      // Clean up the temporary blob even if no content
-      await blockBlobClient.deleteIfExists();
-      return NextResponse.json({ success: true, message: `File '${file.name}' processed, but no content extracted for indexing.` });
+      console.log('File content is empty. Skipping indexing. The original file remains in blob storage.');
+      // If no content, still create a Document record if desired, or handle differently.
+      // For now, we will create a DB record even for empty content to track the uploaded file.
+      try {
+        const originalFileIdForEmpty = createHash('sha256').update(projectId + file.name + file.size).digest('hex').substring(0, 24);
+        await prisma.document.create({
+          data: {
+            projectId: projectId,
+            blobUri: finalBlobUrl,
+            searchDocId: originalFileIdForEmpty, 
+            fileName: file.name,
+          }
+        });
+        console.log(`Successfully created Document record in DB for (empty content) ${file.name}, project ${projectId}`);
+        return NextResponse.json({ success: true, message: `File '${file.name}' processed, but no content extracted. DB record created.`, originalFileId: originalFileIdForEmpty });
+      } catch (dbError: any) {
+         console.error(`Error creating Document record in DB for (empty content) ${file.name}:`, dbError);
+         return NextResponse.json({ success: false, error: `Failed to save metadata for empty file. Details: ${dbError.message}`}, { status: 500 });
+      }
     }
 
     console.log("Chunking extracted content...");
     const textChunks = chunkText(fileContent);
     console.log(`Content split into ${textChunks.length} chunks.`);
 
-    // --- Step 4: Process and Create Documents for Azure Search ---
     const documentsToUpload = [];
-    const originalFileId = createHash('sha256').update(projectId + file.name + file.size).digest('hex').substring(0, 24); // Include projectId in hash for uniqueness
+    const originalFileId = createHash('sha256').update(projectId + file.name + file.size).digest('hex').substring(0, 24);
 
     for (let i = 0; i < textChunks.length; i++) {
       const chunk = textChunks[i];
-      console.log(`Processing chunk ${i + 1}/${textChunks.length}...`);
       const embedding = await generateEmbedding(chunk);
       const chunkId = `${originalFileId}_chunk_${i}`;
-      
-      // We'll keep the projectId prefix in sourcefile for compatibility
-      // but also add the explicit projectId field
       const projectPrefixedSourcefile = `${projectId}/${file.name}`;
       
       const document = {
@@ -230,12 +234,11 @@ export async function POST(request: Request) {
         embedding: embedding,
         sourcefile: projectPrefixedSourcefile,
         originalFileId: originalFileId,
-        projectId: projectId // Add explicit projectId field
+        projectId: projectId
       };
       documentsToUpload.push(document);
     }
 
-    // --- Step 5: Upload to Azure Search ---
     if (documentsToUpload.length > 0) {
       console.log(`Uploading ${documentsToUpload.length} documents to index '${indexName}'...`);
       const result = await searchClient.mergeOrUploadDocuments(documentsToUpload);
@@ -243,16 +246,35 @@ export async function POST(request: Request) {
 
       const failedCount = result.results.filter(r => !r.succeeded).length;
       if (failedCount === 0) {
-        console.log("All document chunks uploaded successfully.");
-        return NextResponse.json({ success: true, message: `File '${file.name}' processed and indexed for project ${projectId}.`, originalFileId: originalFileId });
+        console.log("All document chunks uploaded successfully to AI Search.");
+        try {
+          await prisma.document.create({
+            data: {
+              projectId: projectId,
+              blobUri: finalBlobUrl,
+              searchDocId: originalFileId,
+              fileName: file.name,
+            }
+          });
+          console.log(`Successfully created Document record in DB for ${file.name}, project ${projectId}`);
+          return NextResponse.json({ success: true, message: `File '${file.name}' processed, indexed, and DB record created for project ${projectId}.`, originalFileId: originalFileId });
+        } catch (dbError: any) {
+          console.error(`Error creating Document record in DB for ${file.name}:`, dbError);
+          return NextResponse.json({ 
+            success: false, 
+            error: `File indexed in Azure, but failed to save metadata to database. Please check server logs. Details: ${dbError.message}`,
+            originalFileId: originalFileId 
+          }, { status: 500 });
+        }
       } else {
         console.error(`Failed to upload ${failedCount} out of ${documentsToUpload.length} document chunks.`);
         const firstError = result.results.find(r => !r.succeeded);
         return NextResponse.json({ success: false, error: `Failed to index some chunks for project ${projectId}. Error: ${firstError?.errorMessage}` }, { status: 500 });
       }
     } else {
-      console.log("No document chunks generated after processing.");
-      return NextResponse.json({ success: true, message: `File '${file.name}' processed for project ${projectId}, but no content chunks generated.` });
+      // This case should ideally be covered by the earlier check for empty fileContent
+      console.log("No document chunks generated after processing, though content was present.");
+      return NextResponse.json({ success: true, message: `File '${file.name}' processed for project ${projectId}, but no content chunks generated for AI Search.` });
     }
 
   } catch (error: any) {
@@ -334,36 +356,26 @@ export async function DELETE(request: Request) {
     }
     
     console.log(`Attempting to delete all chunks for originalFileId: ${originalFileIdToDelete}`);
-
-    // 1. Find all document chunks matching the originalFileId
     const searchResults = await searchClient.search("*", {
         filter: `originalFileId eq '${originalFileIdToDelete}'`, 
         select: ["id"], 
-        top: 1000 // Assume max 1000 chunks per file
+        top: 1000
     });
-
     const documentsToDelete: { id: string }[] = [];
     for await (const result of searchResults.results) {
-        // Assuming the document structure is { id: string, ... }
         const doc = result.document as { id: string; [key: string]: unknown }; 
         if (doc && typeof doc.id === 'string') {
             documentsToDelete.push({ id: doc.id });
         }
     }
-
     if (documentsToDelete.length === 0) {
         console.log(`No documents found matching originalFileId ${originalFileIdToDelete}. Nothing to delete.`);
         return new Response(null, { status: 204 }); 
     }
-
     console.log(`Found ${documentsToDelete.length} document chunks to delete.`);
-
-    // 2. Delete the found documents in a batch
     const result = await searchClient.deleteDocuments(documentsToDelete);
     console.log("Document deletion batch result:", result);
-
     const failedDeletions = result.results.filter(r => !r.succeeded);
-
     if (failedDeletions.length === 0) {
       console.log(`All ${documentsToDelete.length} chunks for ${originalFileIdToDelete} deleted successfully.`);
       return new Response(null, { status: 204 }); 
@@ -371,11 +383,8 @@ export async function DELETE(request: Request) {
       const firstError = failedDeletions[0];
       const errorMsg = firstError?.errorMessage ?? "Unknown error during batch deletion.";
       console.error(`Failed to delete ${failedDeletions.length} out of ${documentsToDelete.length} chunks for ${originalFileIdToDelete}. First error on key ${firstError?.key}:`, errorMsg);
-      // Use the status code from the first error if available
       return NextResponse.json({ success: false, error: `Failed to delete some chunks: ${errorMsg}` }, { status: firstError?.statusCode ?? 500 });
     }
-    // --- End Delete by originalFileId Logic ---
-
   } catch (error: any) {
     console.error('Error during DELETE operation:', error);
     return NextResponse.json({ success: false, error: `An error occurred during deletion: ${error.message}` }, { status: 500 });
