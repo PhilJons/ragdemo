@@ -23,6 +23,7 @@ import LoginButton from "@/components/auth/LoginButton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DEFAULT_SYSTEM_PROMPTS, type SystemPrompt } from "@/lib/prompt-constants";
 import CreateProjectDialog from "./create-project-dialog";
+import { Label } from "@/components/ui/label";
 
 // --- SystemPrompt interface and DEFAULT_SYSTEM_PROMPTS are MOVED to lib/prompt-constants.ts ---
 // Will import them later
@@ -179,6 +180,11 @@ export default function ChatInterface() {
   const [currentChatMaxTokens, setCurrentChatMaxTokens] = useState<number>(globalMaxTokens);
   const [currentChatSystemPromptContent, setCurrentChatSystemPromptContent] = useState<string>("");
 
+  // --- State for Deep Analysis ---
+  const [isDeepAnalysisMode, setIsDeepAnalysisMode] = useState<boolean>(false);
+  const [currentDeepAnalysisStatus, setCurrentDeepAnalysisStatus] = useState<string | null>(null);
+  // --- End State for Deep Analysis ---
+
   const { 
     messages, input, handleInputChange, handleSubmit, isLoading, data, setMessages
   } = useChat({
@@ -187,27 +193,29 @@ export default function ChatInterface() {
       selectedSystemPromptContent: currentChatSystemPromptContent,
       temperature: currentChatTemperature,
       maxTokens: currentChatMaxTokens,
-      projectId: activeChatProjectId, 
+      projectId: activeChatProjectId,
+      isDeepAnalysisMode: isDeepAnalysisMode, // Added for Deep Analysis
+    },
+    onFinish: () => {
+      // Clear deep analysis status when a message completes
+      setCurrentDeepAnalysisStatus(null);
     },
     onError: (error: any) => {
-      console.error("API Error:", error); // Log the error
+      console.error("API Error:", error); 
       let errorMessage = "An unexpected error occurred.";
       
       try {
         if (error.message) {
-          // Try to parse the error message if it's JSON
           const parsedError = JSON.parse(error.message);
           errorMessage = parsedError?.error || errorMessage;
         } else if (error.toString) {
-          // Fallback to toString
           errorMessage = error.toString();
         }
       } catch (parseError) {
-        // If JSON parsing fails, use the raw message
         errorMessage = error.message || errorMessage;
       }
-      
       setError(errorMessage);
+      setCurrentDeepAnalysisStatus(null); // Clear status on error too
     },
   });
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -328,35 +336,44 @@ export default function ChatInterface() {
     setSelectedPromptName(name);
   };
 
-  // Process source documents from the data stream
+  // Process data stream for sourceDocuments and deepAnalysisStatus
   useEffect(() => {
     if (data && Array.isArray(data)) {
-      console.log("Processing data stream:", JSON.stringify(data));
+      // console.log("Processing data stream:", JSON.stringify(data)); // Can be very verbose
       const newDocumentMap: Record<string, { text: string; sourcefile: string }> = {};
       let foundDocs = false;
+      let deepStatusUpdate: string | null = null;
 
-      // Iterate through all data entries and accumulate sourceDocuments
       data.forEach(item => {
-        if (typeof item === 'object' && item !== null && !Array.isArray(item) && item.hasOwnProperty('sourceDocuments') && Array.isArray(item.sourceDocuments)) {
-          (item.sourceDocuments as any[]).forEach((doc: any) => {
-            if (doc && doc.id && doc.text) {
-              newDocumentMap[doc.id] = { text: doc.text, sourcefile: doc.sourcefile };
-              foundDocs = true;
-            }
-          });
+        // Ensure item is an object and not null before trying to access properties
+        if (typeof item === 'object' && item !== null && !Array.isArray(item)) {
+          // Handle sourceDocuments
+          if (item.hasOwnProperty('sourceDocuments') && Array.isArray(item.sourceDocuments)) {
+            (item.sourceDocuments as any[]).forEach((doc: any) => {
+              if (doc && doc.id && doc.text) {
+                newDocumentMap[doc.id] = { text: doc.text, sourcefile: doc.sourcefile };
+                foundDocs = true;
+              }
+            });
+          }
+          // Handle deepAnalysisStatus
+          // Check if item has deepAnalysisStatus and it's a string
+          const statusItem = item as { deepAnalysisStatus?: unknown }; // Type assertion
+          if (statusItem.deepAnalysisStatus && typeof statusItem.deepAnalysisStatus === 'string') {
+            deepStatusUpdate = statusItem.deepAnalysisStatus;
+            console.log("Deep Analysis Status Update:", deepStatusUpdate);
+          }
         }
       });
 
       if (foundDocs) {
-        console.log("Updating documentMap from accumulated data stream entries:", newDocumentMap);
-        // Use functional update to ensure we have the latest state
         setDocumentMap(prevMap => {
           const updatedMap = { ...prevMap, ...newDocumentMap };
-          console.log('Document map state AFTER update:', updatedMap);
           return updatedMap;
         });
-      } else {
-        console.log("No sourceDocuments found in any data stream entries.");
+      }
+      if (deepStatusUpdate) {
+        setCurrentDeepAnalysisStatus(deepStatusUpdate);
       }
     }
   }, [data]);
@@ -380,6 +397,10 @@ export default function ChatInterface() {
 
   const handleSubmitWithErrorReset = (event: React.FormEvent) => {
     setError(null);
+    // Before submitting, if deep analysis mode is on, perhaps clear the status or set to "Initiating..."
+    if (isDeepAnalysisMode) {
+        setCurrentDeepAnalysisStatus("Initiating Deep Analysis...");
+    }
     handleSubmit(event);
   };
 
@@ -840,6 +861,26 @@ export default function ChatInterface() {
               onScroll={handleScroll}
             />
 
+            {/* Deep Analysis Switch and Status */} 
+            <div className="px-4 py-2 border-t flex items-center space-x-3 bg-background">
+                <div className="flex items-center space-x-2">
+                    <Switch
+                        id="deep-analysis-toggle"
+                        checked={isDeepAnalysisMode}
+                        onCheckedChange={setIsDeepAnalysisMode}
+                        disabled={isLoading} // Disable while a message is in flight
+                    />
+                    <Label htmlFor="deep-analysis-toggle" className="text-sm text-muted-foreground">
+                        Deep Analysis
+                    </Label>
+                </div>
+            </div>
+            {currentDeepAnalysisStatus && (
+                <div className="px-4 pb-2 text-xs text-muted-foreground text-center">
+                    {currentDeepAnalysisStatus}
+                </div>
+            )}
+            {/* End Deep Analysis Switch and Status */}
             <ChatInput 
               input={input} 
               onInputChange={handleInputChange} 

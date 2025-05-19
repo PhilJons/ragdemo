@@ -195,8 +195,6 @@ export async function POST(request: Request) {
 
     if (!fileContent || fileContent.trim().length === 0) {
       console.log('File content is empty. Skipping indexing. The original file remains in blob storage.');
-      // If no content, still create a Document record if desired, or handle differently.
-      // For now, we will create a DB record even for empty content to track the uploaded file.
       try {
         const originalFileIdForEmpty = createHash('sha256').update(projectId + file.name + file.size).digest('hex').substring(0, 24);
         await prisma.document.create({
@@ -205,6 +203,7 @@ export async function POST(request: Request) {
             blobUri: finalBlobUrl,
             searchDocId: originalFileIdForEmpty, 
             fileName: file.name,
+            extractedText: fileContent,
           }
         });
         console.log(`Successfully created Document record in DB for (empty content) ${file.name}, project ${projectId}`);
@@ -254,6 +253,7 @@ export async function POST(request: Request) {
               blobUri: finalBlobUrl,
               searchDocId: originalFileId,
               fileName: file.name,
+              extractedText: fileContent,
             }
           });
           console.log(`Successfully created Document record in DB for ${file.name}, project ${projectId}`);

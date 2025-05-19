@@ -27,8 +27,12 @@ yarn-debug.log*
 yarn-error.log*
 
 # local env files
-.env*.local
-.env
+.env # Ignore .env at the root
+.env.local # Ignore .env.local at the root
+.env.*.local # Ignore .env.development.local, .env.test.local, etc. at the root
+**/.env # Ignore .env in any subdirectory
+**/.env.local # Ignore .env.local in any subdirectory
+**/.env.*.local # Ignore .env.development.local, etc., in any subdirectory
 
 # vercel
 .vercel
@@ -40,9 +44,6 @@ next-env.d.ts
 # Logs
 logs
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 lerna-debug.log*
 .pnpm-debug.log*
 
@@ -59,7 +60,7 @@ pids
 lib-cov
 
 # Coverage directory used by tools like istanbul
-coverage
+# coverage # Already covered by /coverage in testing section
 *.lcov
 
 # nyc test coverage
@@ -78,14 +79,11 @@ bower_components
 build/Release
 
 # Dependency directories
-node_modules/
+# node_modules/ # Already covered by /node_modules
 jspm_packages/
 
 # Snowpack dependency directory (https://snowpack.dev/)
 web_modules/
-
-# TypeScript cache
-*.tsbuildinfo
 
 # Optional eslint cache
 .eslintcache
@@ -108,23 +106,12 @@ web_modules/
 # Yarn Integrity file
 .yarnclean
 
-# dotenv environment variables file
-.env
-.env*.local
-
 # Docusaurus cache and build output
 .docusaurus
-build
-
-# Next.js build output
-.next/
-out/
+# build # Covered by /build in production section
 
 # Next.js build artifacts cache (next export)
 cache/
-
-# Vercel platform environment variables file
-.vercel
 
 # Serverless directories
 .serverless/
@@ -139,8 +126,8 @@ dist/
 .stackblitzrc
 
 # Gatsby files
-.cache/
-public
+# .cache/ # Covered by general cache/ above if it is for Next.js build artifacts
+public/
 
 # Service Worker files
 sw.js
@@ -153,20 +140,20 @@ ios/
 .svelte-kit/
 
 # Remix build output
-build/
-public/build/
+# build/ # Covered by /build in production section
+# public/build/ # Redundant if public/ is kept and build/ is covered
 
 # Astro build output
 .astro/
-dist/
+# dist/ # Covered by general dist/ if Nuxt.js uses it
 
 # SolidStart build output
 .solid/
-dist/
+# dist/ # Covered by general dist/ if Nuxt.js uses it
 
 # RedwoodJS build output
 .redwood/
-dist/
+# dist/ # Covered by general dist/ if Nuxt.js uses it
 api/dist/
 web/dist/
 
@@ -187,12 +174,9 @@ _site/
 
 # Local settings and environment variables files
 local.settings.json
-.env.local
 
-# Prisma folder (for generated client)
+# Prisma specific generated client
 /prisma/generated/
-/generated/
-/generated/prisma/
 
 # SQLite database files
 *.sqlite
