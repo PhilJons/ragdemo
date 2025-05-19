@@ -193,7 +193,7 @@ export default function ChatInterface() {
       selectedSystemPromptContent: currentChatSystemPromptContent,
       temperature: currentChatTemperature,
       maxTokens: currentChatMaxTokens,
-      projectId: activeChatProjectId,
+      projectId: activeChatProjectId, 
       isDeepAnalysisMode: isDeepAnalysisMode, // Added for Deep Analysis
     },
     onFinish: () => {
@@ -349,12 +349,12 @@ export default function ChatInterface() {
         if (typeof item === 'object' && item !== null && !Array.isArray(item)) {
           // Handle sourceDocuments
           if (item.hasOwnProperty('sourceDocuments') && Array.isArray(item.sourceDocuments)) {
-            (item.sourceDocuments as any[]).forEach((doc: any) => {
-              if (doc && doc.id && doc.text) {
-                newDocumentMap[doc.id] = { text: doc.text, sourcefile: doc.sourcefile };
-                foundDocs = true;
-              }
-            });
+          (item.sourceDocuments as any[]).forEach((doc: any) => {
+            if (doc && doc.id && doc.text) {
+              newDocumentMap[doc.id] = { text: doc.text, sourcefile: doc.sourcefile };
+              foundDocs = true;
+            }
+          });
           }
           // Handle deepAnalysisStatus
           // Check if item has deepAnalysisStatus and it's a string

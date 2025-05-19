@@ -22,7 +22,7 @@ async function getAllProjectDocumentReferences(projectId: string): Promise<{ id:
     });
     console.log(`Deep Analysis: Found ${documents.length} document references for project ${projectId} from database.`);
     // Map to the expected return type { id: string, name: string }
-    return documents.map(doc => ({ id: doc.id, name: doc.fileName }));
+    return documents.map((doc: { id: string; fileName: string }) => ({ id: doc.id, name: doc.fileName }));
   } catch (error) {
     console.error(`Deep Analysis: Error fetching document references for project ${projectId}:`, error);
     return []; // Return empty array on error
@@ -200,54 +200,54 @@ export async function POST(req: Request) {
       // --- Standard RAG Workflow (existing logic) ---
       console.log("--- STANDARD RAG MODE ---");
       let retrievedContext = "";
-      let sourceDocuments: any[] = [];
-  
+    let sourceDocuments: any[] = [];
+
       if (userQuery) {
-        try {
+      try {
           const searchResults = await findRelevantContent(userQuery, projectId || undefined);
-          const validResults = searchResults.filter(r => r.id !== 'error' && r.id !== 'no-results') as Array<{ id: string, text: string, sourcefile: string, projectId?: string }>;
-          
-          if (validResults.length > 0) {
-            sourceDocuments = validResults.map(doc => ({ 
-              id: doc.id,
-              text: doc.text,
-              sourcefile: doc.sourcefile
-            }));
-            retrievedContext = "Context from knowledge base:\n";
-            validResults.forEach((result) => {
-              retrievedContext += `[Source ID: ${result.id}, sourcefile: ${result.sourcefile}] ${result.text}\n`;
-            });
-            data.append({ sourceDocuments }); 
-          } 
-        } catch (searchError) {
-          console.error("Error calling findRelevantContent:", searchError);
+        const validResults = searchResults.filter(r => r.id !== 'error' && r.id !== 'no-results') as Array<{ id: string, text: string, sourcefile: string, projectId?: string }>;
+        
+        if (validResults.length > 0) {
+          sourceDocuments = validResults.map(doc => ({ 
+            id: doc.id,
+            text: doc.text,
+            sourcefile: doc.sourcefile
+          }));
+          retrievedContext = "Context from knowledge base:\n";
+          validResults.forEach((result) => {
+            retrievedContext += `[Source ID: ${result.id}, sourcefile: ${result.sourcefile}] ${result.text}\n`;
+          });
+          data.append({ sourceDocuments });
+        } 
+      } catch (searchError) {
+        console.error("Error calling findRelevantContent:", searchError);
           // Potentially stream an error message back to the user or handle gracefully
-        }
       }
-      
+    }
+    
       const messagesWithContext: CoreMessage[] = [...messages];
-      if (retrievedContext && lastUserMessage) {
-          const lastUserMessageIndex = messagesWithContext.findLastIndex(m => m.role === 'user');
-          if (lastUserMessageIndex !== -1 && typeof messagesWithContext[lastUserMessageIndex].content === 'string') {
+    if (retrievedContext && lastUserMessage) {
+        const lastUserMessageIndex = messagesWithContext.findLastIndex(m => m.role === 'user');
+        if (lastUserMessageIndex !== -1 && typeof messagesWithContext[lastUserMessageIndex].content === 'string') {
               // Append context to the last user message content
-              messagesWithContext[lastUserMessageIndex].content = `${messagesWithContext[lastUserMessageIndex].content}\n\n${retrievedContext}`;
-          } else {
+            messagesWithContext[lastUserMessageIndex].content = `${messagesWithContext[lastUserMessageIndex].content}\n\n${retrievedContext}`;
+        } else {
               // Fallback: if no user message or content isn't string, add context as a system message
-              messagesWithContext.unshift({ role: 'system', content: retrievedContext });
-          }
-      }
-  
-      const result = await streamText({
-        model: azure(process.env.AZURE_DEPLOYMENT_NAME!),
-        messages: messagesWithContext,
-        system: systemPromptToUse,
-        temperature: temperatureToUse,
-        maxTokens: maxTokensToUse,
-        onFinish() {
-          data.close();
+             messagesWithContext.unshift({ role: 'system', content: retrievedContext });
         }
-      });
-      return new StreamingTextResponse(result.toAIStream(), {}, data);
+    }
+
+    const result = await streamText({
+      model: azure(process.env.AZURE_DEPLOYMENT_NAME!),
+      messages: messagesWithContext,
+      system: systemPromptToUse,
+      temperature: temperatureToUse,
+      maxTokens: maxTokensToUse,
+      onFinish() {
+        data.close();
+      }
+    });
+    return new StreamingTextResponse(result.toAIStream(), {}, data);
     }
 
   } catch (error: unknown) {
