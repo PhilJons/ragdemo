@@ -15,7 +15,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Trash2, UploadCloud, FileText, X, Info, ChevronDown, CheckCircle, AlertCircle, Loader2, Trash, Settings as SettingsIcon } from 'lucide-react';
+import { Trash2, UploadCloud, FileText, X, Info, ChevronDown, CheckCircle, AlertCircle, Loader2, Trash, Settings as SettingsIcon, ExternalLink } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
@@ -74,6 +74,7 @@ interface SettingsDialogProps {
   maxTokens: number;
   onMaxTokensChange: (value: number) => void;
   currentProjectId: string | null; // Added property for the active project ID from chat interface
+  onProjectDeleted: (deletedProjectId: string) => void; // New prop for handling project deletion callback
 }
 
 // --- Constants ---
@@ -130,7 +131,8 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
   onTemperatureChange: onGlobalTemperatureChange,
   maxTokens: globalMaxTokens,
   onMaxTokensChange: onGlobalMaxTokensChange,
-  currentProjectId
+  currentProjectId,
+  onProjectDeleted
 }) => {
   // State for file management
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -172,6 +174,12 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
   
   const [isSavingProjectSettings, setIsSavingProjectSettings] = useState<boolean>(false);
   const [projectSettingsError, setProjectSettingsError] = useState<string | null>(null);
+
+  // State for project deletion confirmation
+  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState<boolean>(false);
+  const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
+  const [isDeletingProject, setIsDeletingProject] = useState<boolean>(false);
+  const [deleteProjectError, setDeleteProjectError] = useState<string | null>(null);
 
   // --- Fetch User Projects Logic ---
   const fetchProjects = useCallback(async () => {
@@ -565,7 +573,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
   };
 
   const closeDialog = () => {
-    if (!isUploadingGlobal && !isDeletingAll && !isDeletingSelected && !isGeneratingAiPrompt) {
+    if (!isUploadingGlobal && !isDeletingAll && !isDeletingSelected && !isGeneratingAiPrompt && !isDeletingProject) {
       onOpenChange(false);
     }
   };
@@ -621,12 +629,59 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
     }
   };
 
+  // --- Function to handle opening the delete confirmation ---
+  const openDeleteConfirmation = () => {
+    if (!currentProjectId) return;
+    const project = projects.find(p => p.id === currentProjectId);
+    if (project) {
+      setProjectToDelete(project);
+      setDeleteProjectError(null);
+      setIsDeleteConfirmOpen(true);
+    }
+  };
+
+  // --- Function to handle actual project deletion ---
+  const handleDeleteProject = async () => {
+    if (!projectToDelete) return;
+    setIsDeletingProject(true);
+    setDeleteProjectError(null);
+
+    try {
+      const response = await fetch(`/api/projects/${projectToDelete.id}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        const errorResult = await response.json().catch(() => ({ error: `HTTP error! status: ${response.status}` }));
+        throw new Error(errorResult.error || 'Failed to delete project.');
+      }
+      
+      // Call the callback to notify parent component (ChatInterface)
+      onProjectDeleted(projectToDelete.id);
+      
+      // Close confirmation and main settings dialog
+      setIsDeleteConfirmOpen(false);
+      setProjectToDelete(null);
+      // Optionally, close the main settings dialog or switch tab after deletion
+      // onOpenChange(false); // Or let ChatInterface handle this based on activeProjectId change
+      fetchProjects(); // Re-fetch projects to update the list within the dialog if it remains open
+
+    } catch (error: any) {
+      console.error(`Error deleting project ${projectToDelete.id}:`, error);
+      setDeleteProjectError(error.message);
+      // Keep confirmation dialog open to show error, or show alert
+      alert(`Error deleting project: ${error.message}`);
+    } finally {
+      setIsDeletingProject(false);
+    }
+  };
+
   return (
     <Dialog open={isOpen} onOpenChange={closeDialog}>
       <DialogContent 
         className="max-w-[1200px] w-full h-[85vh] flex flex-col p-0"
         onInteractOutside={(e) => { 
-          if (isUploadingGlobal || isDeletingAll || isDeletingSelected || isGeneratingAiPrompt) e.preventDefault(); 
+          if (isUploadingGlobal || isDeletingAll || isDeletingSelected || isGeneratingAiPrompt || isDeletingProject) e.preventDefault(); 
         }}
       >
         <DialogHeader className="p-6 pb-4 flex-shrink-0 border-b border-slate-200 dark:border-slate-700">
@@ -904,11 +959,28 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
                     </div>
 
                     <Separator className="my-6 border-slate-200 dark:border-slate-700/60" />
-                    <Button onClick={handleSaveProjectSettings} disabled={isSavingProjectSettings} className="w-full sm:w-auto bg-purple-600 hover:bg-purple-700 text-white dark:bg-purple-500 dark:hover:bg-purple-600 focus:ring-purple-400 py-2.5">
+                    <Button onClick={handleSaveProjectSettings} disabled={isSavingProjectSettings || isDeletingProject} className="w-full sm:w-auto bg-purple-600 hover:bg-purple-700 text-white dark:bg-purple-500 dark:hover:bg-purple-600 focus:ring-purple-400 py-2.5">
                       {isSavingProjectSettings ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                       Save Project Settings
                     </Button>
                     {projectSettingsError && <p className="text-sm text-red-600 dark:text-red-500 mt-2">Error saving: {projectSettingsError}</p>}
+
+                    {/* Delete Project Button - Added Here */} 
+                    <div className="mt-10 pt-6 border-t border-dashed border-red-300 dark:border-red-700/50">
+                      <h3 className="text-md font-semibold text-red-600 dark:text-red-400 mb-2">Danger Zone</h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
+                        Deleting a project will permanently remove all its associated data, including uploaded sources and custom prompts. This action cannot be undone.
+                      </p>
+                      <Button 
+                        variant="destructive" 
+                        onClick={openDeleteConfirmation} 
+                        disabled={isSavingProjectSettings || isDeletingProject || !currentProjectId}
+                        className="w-full sm:w-auto"
+                      >
+                        <Trash className="mr-2 h-4 w-4" />
+                        Delete Project: {projects.find(p => p.id === currentProjectId)?.name || ''}
+                      </Button>
+                    </div>
                   </div>
                 </TabsContent>
 
@@ -984,6 +1056,46 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
             )}
           </div>
         </Tabs>
+
+        {/* Confirmation Dialog for Project Deletion */} 
+        {projectToDelete && (
+          <Dialog open={isDeleteConfirmOpen} onOpenChange={(open) => {if (!isDeletingProject) setIsDeleteConfirmOpen(open);}}>
+            <DialogContent onInteractOutside={(e) => {if(isDeletingProject) e.preventDefault();}}>
+              <DialogHeader>
+                <DialogTitle className="text-lg font-medium text-red-600 dark:text-red-400">Confirm Project Deletion</DialogTitle>
+                <DialogDescription className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+                  Are you sure you want to delete the project "<strong className='text-slate-800 dark:text-slate-200'>{projectToDelete.name}</strong>"?
+                  <br />
+                  All associated data (prompts, settings, and indexed documents) will be permanently removed. 
+                  <strong className='text-red-500 dark:text-red-400'>This action cannot be undone.</strong>
+                </DialogDescription>
+              </DialogHeader>
+              {deleteProjectError && (
+                <p className="my-3 text-sm text-red-600 bg-red-50 dark:bg-red-900/30 p-3 rounded-md">Error: {deleteProjectError}</p>
+              )}
+              <div className="mt-5 sm:mt-6 flex flex-col sm:flex-row-reverse gap-3">
+                <Button
+                  variant="destructive"
+                  onClick={handleDeleteProject}
+                  disabled={isDeletingProject}
+                  className="w-full sm:w-auto"
+                >
+                  {isDeletingProject ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                  Yes, Delete Project
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {if (!isDeletingProject) setIsDeleteConfirmOpen(false);}}
+                  disabled={isDeletingProject}
+                  className="w-full sm:w-auto"
+                >
+                  Cancel
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+        )}
+
       </DialogContent>
     </Dialog>
   );

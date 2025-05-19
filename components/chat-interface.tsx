@@ -225,7 +225,7 @@ export default function ChatInterface() {
     // setDefaultPromptNames(IMPORTED_DEFAULT_SYSTEM_PROMPTS.map(p => p.name));
   }, []); // Empty dependency array, runs once
 
-  // Fetch projects on component mount
+  // Fetch projects on component mount and when activeChatProjectId changes (to refresh if needed from elsewhere)
   useEffect(() => {
     const fetchUserProjects = async () => {
       setIsLoadingProjects(true);
@@ -234,10 +234,14 @@ export default function ChatInterface() {
         if (!response.ok) throw new Error('Failed to fetch projects');
         const userProjects: Project[] = await response.json();
         setProjects(userProjects);
-        if (userProjects.length > 0 && !activeChatProjectId) {
-          // Default to the first project if none is active
-          // Or load from localStorage if you implement a preference
+        // If activeChatProjectId is no longer valid (e.g., deleted) or was never set,
+        // and there are projects, default to the first one.
+        // If activeChatProjectId is null and becomes valid, it will be handled by project selection.
+        if ((!activeChatProjectId || !userProjects.some(p => p.id === activeChatProjectId)) && userProjects.length > 0) {
           setActiveChatProjectId(userProjects[0].id);
+        } else if (userProjects.length === 0) {
+          // If no projects exist (e.g., all deleted), set active to null
+          setActiveChatProjectId(null);
         }
       } catch (err) {
         console.error("Error fetching projects:", err);
@@ -247,7 +251,30 @@ export default function ChatInterface() {
       }
     };
     fetchUserProjects();
-  }, [activeChatProjectId]); // Added activeChatProjectId to dependency array
+  }, []); // Removed activeChatProjectId from dependency to prevent re-fetch on every selection. Manage refresh explicitly.
+
+  // Callback function to refresh projects list from child components (e.g., CreateProjectDialog)
+  const refreshProjects = useCallback(async () => {
+    setIsLoadingProjects(true);
+    try {
+      const response = await fetch('/api/projects');
+      if (!response.ok) throw new Error('Failed to fetch projects');
+      const userProjects: Project[] = await response.json();
+      setProjects(userProjects);
+      // Logic to ensure activeChatProjectId is still valid
+      if (activeChatProjectId && !userProjects.some(p => p.id === activeChatProjectId)) {
+        setActiveChatProjectId(userProjects.length > 0 ? userProjects[0].id : null);
+      } else if (!activeChatProjectId && userProjects.length > 0) {
+        // If no project was active, and now there are projects, select the first one.
+        setActiveChatProjectId(userProjects[0].id);
+      }
+
+    } catch (err) {
+      console.error("Error refreshing projects:", err);
+    } finally {
+      setIsLoadingProjects(false);
+    }
+  }, [activeChatProjectId]); // Dependencies for refreshProjects
 
   // Update activeProjectFullSettings and chat settings when activeChatProjectId or projects list changes
   useEffect(() => {
@@ -725,8 +752,25 @@ export default function ChatInterface() {
 
   // Add function to handle project creation
   const handleProjectCreated = (newProject: { id: string; name: string }) => {
-    setProjects(prev => [...prev, newProject]);
+    refreshProjects(); // Fetches all projects again to ensure consistency
     setActiveChatProjectId(newProject.id);
+  };
+
+  // Function to handle project deletion callback from SettingsDialog
+  const handleProjectDeleted = (deletedProjectId: string) => {
+    console.log(`Project with ID ${deletedProjectId} was deleted. Updating UI.`);
+    // Update projects list locally first for immediate UI feedback
+    const remainingProjects = projects.filter(p => p.id !== deletedProjectId);
+    setProjects(remainingProjects);
+    
+    if (activeChatProjectId === deletedProjectId) {
+      setActiveChatProjectId(remainingProjects.length > 0 ? remainingProjects[0].id : null);
+    }
+    // Close the settings dialog
+    setIsSettingsOpen(false); 
+    // Optionally, trigger a full refresh from the server if needed to ensure perfect sync,
+    // though local update should be good for UI.
+    // refreshProjects(); 
   };
 
   return (
@@ -875,6 +919,7 @@ export default function ChatInterface() {
         maxTokens={globalMaxTokens}
         onMaxTokensChange={() => {}}
         currentProjectId={activeChatProjectId}
+        onProjectDeleted={handleProjectDeleted}
       />
 
       <CreateProjectDialog 
