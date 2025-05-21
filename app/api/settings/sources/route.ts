@@ -296,7 +296,7 @@ export async function GET(request: Request) {
     console.log(`Fetching sources for project: ${projectId} from index...`);
     
     const searchOptions: any = {
-      select: ["id", "sourcefile", "originalFileId", "projectId"],
+      select: ["id", "sourcefile", "originalFileId"],
       top: 1000 
     };
 
@@ -304,11 +304,15 @@ export async function GET(request: Request) {
     try {
       // Try with projectId field first
       searchOptions.filter = `projectId eq '${projectId}'`;
+      console.log(`[settings/sources/route.ts] Attempting filter with projectId eq '${projectId}'`);
+      console.log(`[settings/sources/route.ts] Using index: '${searchClient.indexName}'. Search options before call (attempt 1):`, JSON.stringify(searchOptions, null, 2));
       searchResults = await searchClient.search("*", searchOptions);
     } catch (error: any) {
-      console.warn(`Error using projectId field, falling back to sourcefile filtering: ${error.message}`);
+      console.warn(`[settings/sources/route.ts] Error using projectId field for primary filter: ${error.message}`);
       // Fall back to sourcefile pattern matching
       searchOptions.filter = `search.ismatchscoring('${projectId}', 'sourcefile')`;
+      console.log(`[settings/sources/route.ts] Falling back to filter: ${searchOptions.filter}`);
+      console.log(`[settings/sources/route.ts] Using index: '${searchClient.indexName}'. Search options before call (fallback):`, JSON.stringify(searchOptions, null, 2));
       searchResults = await searchClient.search("*", searchOptions);
     }
 

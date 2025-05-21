@@ -5,10 +5,11 @@ import { StreamingTextResponse } from "ai";
 import prisma from "@/lib/prisma"; // Import Prisma client
 import { DEFAULT_SYSTEM_PROMPTS } from "@/lib/prompt-constants"; // Import from correct location
 import { generateDynamicMapPromptAction } from "@/app/actions/generateDynamicMapPrompt"; // Added for Deep Analysis
+import { generateDynamicReducePromptAction } from "@/app/actions/generateDynamicReducePromptAction"; // Added for Dynamic Reduce Prompt
 
 // Allow streaming responses up to 30 seconds for standard RAG, Deep Analysis might take longer
 // Consider adjusting this or using a different mechanism for long-running Deep Analysis tasks if they exceed this limit.
-export const maxDuration = 60; // Increased for potentially longer Deep Analysis
+export const maxDuration = 300; // Increased for potentially longer Deep Analysis (e.g., 5 minutes)
 
 // --- Implementations for Deep Analysis data retrieval ---
 async function getAllProjectDocumentReferences(projectId: string): Promise<{ id: string, name: string }[]> {
@@ -20,9 +21,20 @@ async function getAllProjectDocumentReferences(projectId: string): Promise<{ id:
         fileName: true, // Use fileName as indicated by linter errors
       },
     });
-    console.log(`Deep Analysis: Found ${documents.length} document references for project ${projectId} from database.`);
-    // Map to the expected return type { id: string, name: string }
-    return documents.map(doc => ({ id: doc.id, name: doc.fileName }));
+    console.log(`Deep Analysis: getAllProjectDocumentReferences for projectId: ${projectId}. Found ${documents.length} raw document records.`);
+    // Log each document found
+    documents.forEach(doc => {
+      console.log(`Deep Analysis: Document Record - ID: ${doc.id}, FileName: ${doc.fileName}`);
+    });
+
+    // Filter out documents with null or empty fileName before mapping, as these might be problematic
+    const validDocuments = documents.filter(doc => doc.fileName && doc.fileName.trim() !== '');
+    if (validDocuments.length !== documents.length) {
+      console.warn(`Deep Analysis: Filtered out ${documents.length - validDocuments.length} documents with null or empty fileNames.`);
+    }
+
+    console.log(`Deep Analysis: Returning ${validDocuments.length} valid document references for project ${projectId}.`);
+    return validDocuments.map((doc: { id: string; fileName: string }) => ({ id: doc.id, name: doc.fileName }));
   } catch (error) {
     console.error(`Deep Analysis: Error fetching document references for project ${projectId}:`, error);
     return []; // Return empty array on error
@@ -61,18 +73,27 @@ async function getDocumentContentById(docId: string): Promise<string | null> {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const {
-      messages,
+    const { 
+      messages: currentMessagesArray, // Renamed to avoid conflict with chatHistory
       projectId, 
-      isDeepAnalysisMode, // New: Flag for Deep Analysis mode
+      isDeepAnalysisMode,
+      chatHistory // New: Full chat history from the client
     }: { 
-      messages: CoreMessage[]; 
+      messages: CoreMessage[]; // This is the current turn's messages, typically just the user query
       selectedSystemPromptContent?: string; 
       temperature?: number; 
       maxTokens?: number; 
       projectId?: string | null;
-      isDeepAnalysisMode?: boolean; // Added for Deep Analysis
+      isDeepAnalysisMode?: boolean;
+      chatHistory?: CoreMessage[]; // Optional: Full history up to the current query
     } = body;
+
+    // Use currentMessagesArray for extracting the latest user query
+    const lastUserMessage = currentMessagesArray.findLast(m => m.role === 'user');
+    const userQuery = lastUserMessage && typeof lastUserMessage.content === 'string' ? lastUserMessage.content : "";
+
+    // Rename messages to allMessages to avoid confusion if chatHistory is used directly
+    const allMessages = chatHistory || currentMessagesArray; // Use full history if available, else just current turn
 
     let systemPromptToUse = body.selectedSystemPromptContent || DEFAULT_SYSTEM_PROMPTS.find(p=>p.name === "General RAG Assistant")?.content || "You are a helpful AI assistant.";
     let temperatureToUse = body.temperature ?? 0.7;
@@ -102,152 +123,273 @@ export async function POST(req: Request) {
       console.log("No projectId. Using defaults for chat.");
     }
 
-    const lastUserMessage = messages.findLast(m => m.role === 'user');
-    const userQuery = lastUserMessage && typeof lastUserMessage.content === 'string' ? lastUserMessage.content : "";
-
     if (isDeepAnalysisMode && projectId && userQuery) {
       console.log(`--- DEEP ANALYSIS MODE FOR PROJECT ${projectId} ---`);
-      // 1. Generate Dynamic "Map" Prompt
-      const mapPromptResult = await generateDynamicMapPromptAction(userQuery);
+      
+      let priorConversationSummary = "";
+      if (allMessages && allMessages.length > 1) { // More than 1 message implies history beyond the current query
+        // Create a simple summary of the conversation before the *current* user query.
+        // The last message in `allMessages` is the current user query which is already in `userQuery`.
+        // So, we process up to the second to last message.
+        const historyToSummarize = allMessages.slice(0, -1);
+        if (historyToSummarize.length > 0) {
+          priorConversationSummary = "Prior conversation context:\n";
+          historyToSummarize.forEach(msg => {
+            priorConversationSummary += `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}\n`;
+          });
+          priorConversationSummary += "\n---\n";
+          console.log("Deep Analysis: Generated prior conversation summary for prompts:", priorConversationSummary.substring(0, 200) + "...");
+        }
+      }
+
+      const DEBUG_SINGLE_DOC_PREFIX = "DEBUG_MAP_PHASE_SINGLE_DOC: ";
+      const isDebugSingleDocMode = userQuery.startsWith(DEBUG_SINGLE_DOC_PREFIX);
+      let effectiveUserQuery = userQuery;
+      if (isDebugSingleDocMode) {
+        effectiveUserQuery = userQuery.substring(DEBUG_SINGLE_DOC_PREFIX.length);
+        console.log(`Deep Analysis: DEBUG_SINGLE_DOC_MODE ENABLED. Processing only the first document for query: "${effectiveUserQuery}"`);
+        data.append({ deepAnalysisStatus: `DEBUG MODE: Analyzing first document only for query: "${effectiveUserQuery}"` });
+      } else {
+        data.append({ deepAnalysisStatus: `Deep Analysis Mode started for query: "${effectiveUserQuery}"` });
+      }
+
+      // 1. Dynamic "Map" Prompt Generation
+      data.append({ deepAnalysisStatus: "Generating analytical instructions (map prompt)..." });
+      const mapPromptResult = await generateDynamicMapPromptAction(effectiveUserQuery, priorConversationSummary);
       if (!mapPromptResult.success || !mapPromptResult.mapPrompt) {
         console.error("Deep Analysis: Failed to generate dynamic map prompt:", mapPromptResult.error);
-        return new Response(JSON.stringify({ error: `Failed to start deep analysis: ${mapPromptResult.error}` }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+        data.append({ deepAnalysisStatus: `Error: Failed to generate map prompt - ${mapPromptResult.error}. Aborting.`});
+        data.close();
+        return new StreamingTextResponse(new ReadableStream({ start(c){c.close();}}), {}, data); // Send empty stream but data has error
       }
       const dynamicMapPrompt = mapPromptResult.mapPrompt;
-      console.log("Deep Analysis: Generated Dynamic Map Prompt:", /* dynamicMapPrompt - avoid logging potentially large prompt */ "Prompt Hidden");
+      console.log("Deep Analysis: Generated Dynamic Map Prompt.", /* dynamicMapPrompt - avoid logging potentially large prompt */ "Length:", dynamicMapPrompt.length);
+      data.append({ deepAnalysisStatus: "Analytical instructions (map prompt) generated." });
 
       // 2. Get list of all documents in the project
+      data.append({ deepAnalysisStatus: "Fetching project documents..." });
       const documentReferences = await getAllProjectDocumentReferences(projectId);
       if (documentReferences.length === 0) {
         console.warn("Deep Analysis: No documents found for project", projectId);
-        // Consider streaming a message back to the user here
-        const noDocsStream = new ReadableStream({
-          start(controller) {
-            controller.enqueue("Deep Analysis: No documents were found in this project to analyze.");
-            controller.close();
-          }
-        });
-        return new StreamingTextResponse(noDocsStream);
+        data.append({ deepAnalysisStatus: "No documents found in this project to analyze." });
+        data.close();
+        // Return an empty stream with the data object containing the message
+        const emptyStream = new ReadableStream({ start(controller) { controller.close(); } });
+        return new StreamingTextResponse(emptyStream, {}, data);
       }
       console.log(`Deep Analysis: Found ${documentReferences.length} documents for project ${projectId}.`);
+      data.append({ deepAnalysisStatus: `Found ${documentReferences.length} documents to analyze.` });
+
 
       // 3. "Map" Phase: Process each document
       const intermediateResults: { docName: string, analysis: string }[] = [];
-      // Stream progress updates for the Map phase (optional but good for UX)
-      data.append({ deepAnalysisStatus: `Starting analysis of ${documentReferences.length} documents...`}); 
+      const totalDocs = documentReferences.length;
+      data.append({ deepAnalysisStatus: `Starting analysis of ${totalDocs} documents...`}); 
 
-      for (const docRef of documentReferences) {
-        console.log(`Deep Analysis: Processing document ${docRef.name} (ID: ${docRef.id})`);
-        data.append({ deepAnalysisStatus: `Analyzing document: ${docRef.name}...`}); 
+      for (let i = 0; i < totalDocs; i++) {
+        const docRef = documentReferences[i];
+        const currentDocNumber = i + 1;
+        console.log(`Deep Analysis: Processing document ${currentDocNumber}/${totalDocs}: ${docRef.name} (ID: ${docRef.id})`);
+        data.append({ deepAnalysisStatus: `Analyzing document ${currentDocNumber}/${totalDocs}: ${docRef.name}...`}); 
         const docContent = await getDocumentContentById(docRef.id);
         if (docContent) {
+          const snippetLength = isDebugSingleDocMode ? 500 : 100;
+          console.log(`Deep Analysis: Retrieved extractedText for ${docRef.name} (length: ${docContent.length}). Snippet (first ${snippetLength} chars): ${docContent.substring(0, snippetLength)}...`);
           const mapInstancePrompt = dynamicMapPrompt.replace("{text_content_of_single_document_will_be_injected_here}", docContent);
           
-          // LLM call for this single document (Map step)
-          // Using a non-streaming call here for simplicity to gather intermediate results.
-          // Error handling should be robust for production.
+          console.log("Deep Analysis: MAP PHASE - Prompt for:", docRef.name); // Simplified logging
+          
           try {
-            // Corrected: Use imported generateText for non-streaming single call
             const mapApiResponse = await generateText({
-                model: azure(process.env.AZURE_DEPLOYMENT_NAME!), // Pass the model instance
-                prompt: mapInstancePrompt, // For generateText, prompt is typically part of messages or a direct string
-                // For generateText, direct string prompt is simpler if no complex message history is needed for this map step.
-                // If using messages: messages: [{ role: 'user', content: mapInstancePrompt }],
+                model: azure(process.env.AZURE_DEEP_ANALYSIS_MAP_DEPLOYMENT_NAME!),
+                prompt: mapInstancePrompt, 
                 system: "You are an AI assistant performing a specific analysis task on the provided document text.",
                 temperature: 0.3, 
-                maxTokens: 1500, 
+                maxTokens: 32000, // Ensure this is appropriate for your model context window
             });
             intermediateResults.push({ docName: docRef.name, analysis: mapApiResponse.text });
-            console.log(`Deep Analysis: Finished analysis for ${docRef.name}`);
+            console.log(`Deep Analysis: MAP PHASE - LLM response for document ${docRef.name} (length: ${mapApiResponse.text.length})`);
+            data.append({ deepAnalysisStatus: `Finished analyzing ${currentDocNumber}/${totalDocs}: ${docRef.name}.` });
           } catch (mapError) {
             console.error(`Deep Analysis: Error analyzing document ${docRef.name}:`, mapError);
-            intermediateResults.push({ docName: docRef.name, analysis: `Error analyzing this document: ${mapError instanceof Error ? mapError.message : String(mapError)}` });
+            const errorMessage = mapError instanceof Error ? mapError.message : String(mapError);
+            intermediateResults.push({ docName: docRef.name, analysis: `Error analyzing this document: ${errorMessage}` });
+            data.append({ deepAnalysisStatus: `Error analyzing ${currentDocNumber}/${totalDocs}: ${docRef.name} - ${errorMessage.substring(0, 50)}...` });
           }
         } else {
           console.warn(`Deep Analysis: No content found for document ${docRef.name} (ID: ${docRef.id}). Skipping.`);
           intermediateResults.push({ docName: docRef.name, analysis: "No content could be retrieved for this document." });
+          data.append({ deepAnalysisStatus: `Skipped ${currentDocNumber}/${totalDocs}: ${docRef.name} (no content).` });
         }
-        // Small delay to allow UI to update with status, if frontend handles streaming status updates
-        await new Promise(resolve => setTimeout(resolve, 50)); 
-        data.append({ deepAnalysisStatus: `Finished analyzing: ${docRef.name}. Processed ${intermediateResults.length}/${documentReferences.length}.`}); 
+        
+        if (isDebugSingleDocMode) {
+          console.log("Deep Analysis: DEBUG_SINGLE_DOC_MODE - Processed first document. Breaking map loop.");
+          data.append({ deepAnalysisStatus: `DEBUG MODE: Finished analysis of first document: ${docRef.name}.` });
+          break; 
+        }
       }
-      data.append({ deepAnalysisStatus: "All documents analyzed. Synthesizing final answer..."}); 
+      
+      if (isDebugSingleDocMode && intermediateResults.length > 0) {
+        const debugResultText = `DEBUG MODE: Map Phase Analysis for ${intermediateResults[0].docName}:
 
-      // 4. "Reduce" Phase: Synthesize intermediate results
-      let reduceInput = `Original User Query: ${userQuery}\n\nExtracted Information from Documents:\n---\n`;
+${intermediateResults[0].analysis}`;
+        console.log("Deep Analysis: DEBUG_SINGLE_DOC_MODE - Returning map phase result directly.");
+        const debugStream = new ReadableStream({
+          start(controller) {
+            data.append({ deepAnalysisStatus: "DEBUG MODE: Streaming single document analysis result." });
+            controller.enqueue(debugResultText);
+            controller.enqueue("\n\n[End of Debug Single Document Analysis]");
+            data.append({ deepAnalysisStatus: "DEBUG MODE: Analysis of first document complete." });
+            controller.close();
+          },
+          cancel() {
+            console.log("Debug stream cancelled.");
+          }
+        });
+        data.close(); 
+        return new StreamingTextResponse(debugStream, {}, data);
+      }
+      
+      data.append({ deepAnalysisStatus: `Document analysis phase complete. Processed ${intermediateResults.length} documents. Preparing synthesis...`}); 
+
+      // Generate a summary of map outputs (placeholder for now, can be made more sophisticated)
+      let summaryOfMapOutputs = "Structured analysis from multiple documents, potentially including extracted text, themes, and source IDs.";
+      // Heuristics for summary based on content can be refined or expanded
+      const sampleAnalysis = intermediateResults.length > 0 ? intermediateResults[0].analysis.toLowerCase() : "";
+      if (sampleAnalysis.includes("ceo statement") || userQuery.toLowerCase().includes("vd ord")) {
+        summaryOfMapOutputs = "Analyses of CEO statements (VD ord), including themes, tone, and stylistic elements.";
+      } else if (sampleAnalysis.includes("financial figure")) {
+        summaryOfMapOutputs = "Extracted financial figures and related textual context.";
+      }
+      console.log("Deep Analysis: Summary of map outputs for reduce prompt generation:", summaryOfMapOutputs);
+      data.append({ deepAnalysisStatus: "Generating synthesis instructions (reduce prompt)..." });
+
+      let reduceSystemPromptToUse: string;
+      const reducePromptResult = await generateDynamicReducePromptAction(effectiveUserQuery, summaryOfMapOutputs, priorConversationSummary);
+
+      if (!reducePromptResult.success || !reducePromptResult.reducePrompt) {
+        console.error("Deep Analysis: Failed to generate dynamic reduce prompt:", reducePromptResult.error);
+        reduceSystemPromptToUse = `You are an AI Synthesizer. Based SOLELY AND EXCLUSIVELY on the provided extracted information from multiple documents, provide a comprehensive answer to the Original User Query: "${effectiveUserQuery}". Ensure you consolidate findings, identify patterns, and clearly cite information using the [Source ID: <ID_VALUE>] markers that were preserved in the extracted analysis. Do not use any external knowledge. If the information is insufficient, state that clearly.`;
+        data.append({ deepAnalysisStatus: "Error generating synthesis instructions, using fallback. Preparing final answer..." });
+      } else {
+        reduceSystemPromptToUse = reducePromptResult.reducePrompt;
+        console.log("Deep Analysis: Successfully generated dynamic 'Reduce System Prompt'. Length:", reduceSystemPromptToUse.length);
+        data.append({ deepAnalysisStatus: "Synthesis instructions (reduce prompt) generated. Preparing final answer..." });
+      }
+
+      data.append({ deepAnalysisStatus: "Consolidating all analyzed information..." });
+      let reduceInput = `Original User Query: ${effectiveUserQuery}\n\nExtracted Information from Documents:\n---\n`;
       intermediateResults.forEach(ir => {
         reduceInput += `Document: ${ir.docName}\nAnalysis:\n${ir.analysis}\n---\n`;
       });
-
-      const reduceSystemPrompt = "You are an AI Synthesizer. Based SOLELY AND EXCLUSIVELY on the provided extracted information from multiple documents, provide a comprehensive answer to the Original User Query. Ensure you consolidate findings, identify patterns, and clearly cite information using the [Source ID: <ID_VALUE>] markers that were preserved in the extracted analysis. Do not use any external knowledge.";
+      console.log(`Deep Analysis: Reduce phase input length: ${reduceInput.length}.`); 
+      data.append({ deepAnalysisStatus: "All information consolidated. Generating final synthesized response..." });
       
-      console.log("Deep Analysis: Starting Reduce phase.");
-      // Streaming the final result from the Reduce phase
+      console.log("Deep Analysis: REDUCE PHASE - System prompt being used (first 200 chars):", reduceSystemPromptToUse.substring(0,200) + "...");
+      
+      let fullReduceResponseForLogging = ""; 
+
       const reduceResult = await streamText({
-        model: azure(process.env.AZURE_DEPLOYMENT_NAME!), // Use a capable model, e.g., GPT-4.1 if available and configured
+        model: azure(process.env.AZURE_DEEP_ANALYSIS_REDUCE_DEPLOYMENT_NAME!),
         messages: [{role: "user", content: reduceInput}],
-        system: reduceSystemPrompt,
-        temperature: temperatureToUse, // Use project/default temperature
-        maxTokens: maxTokensToUse, // Use project/default max tokens, ensure it's large enough for synthesis
-        onFinish() {
-          data.append({ deepAnalysisStatus: "Deep Analysis Complete."}); 
+        system: reduceSystemPromptToUse, 
+        temperature: temperatureToUse, 
+        maxTokens: 32000, // Ensure this is appropriate for the reduce model's context window
+        async onFinish(event) { 
+          console.log("[Deep Analysis Reduce onFinish] Fired.");
+          if (event && event.text) {
+            fullReduceResponseForLogging = event.text; 
+            console.log('Deep Analysis: REDUCE PHASE - Full LLM final text from onFinish event (length):', fullReduceResponseForLogging.length);
+          } else {
+            console.log('Deep Analysis: REDUCE PHASE - onFinish event did not directly provide full text. Accumulated stream (if any, length):', fullReduceResponseForLogging.length);
+          }
+          data.append({ deepAnalysisStatus: "Deep Analysis Complete. Final answer stream finished."}); 
+          console.log("[Deep Analysis Reduce onFinish] Appended final status. Calling data.close().");
           data.close();
+          console.log("[Deep Analysis Reduce onFinish] data.close() called.");
         }
       });
-      return new StreamingTextResponse(reduceResult.toAIStream(), {}, data); // Stream final synthesized answer
+
+      const consumeStreamForLogging = async (stream: ReadableStream<Uint8Array>) => {
+        const reader = stream.getReader();
+        const decoder = new TextDecoder();
+        let accumulatedResponse = "";
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            accumulatedResponse += decoder.decode(value, { stream: true });
+          }
+          if (!fullReduceResponseForLogging) { 
+            fullReduceResponseForLogging = accumulatedResponse;
+            console.log('Deep Analysis: REDUCE PHASE - Full LLM response from consuming stream (length):', fullReduceResponseForLogging.length);
+          }
+        } catch (error) {
+          console.error("Error consuming reduce stream for logging:", error);
+        }
+      };
+      
+      const [streamForClient, streamForLogging] = reduceResult.toAIStream().tee();
+      consumeStreamForLogging(streamForLogging); // Consume for logging, don't await
+
+      console.log("[Deep Analysis] Reduce streamText call finished. Returning StreamingTextResponse to client.");
+      // Note: data object is passed along with the StreamingTextResponse.
+      // The onFinish callback for streamText is responsible for calling data.close().
+      return new StreamingTextResponse(streamForClient, {}, data); 
 
     } else {
       // --- Standard RAG Workflow (existing logic) ---
+      const data = new StreamData(); // Standard RAG also needs its own StreamData
       console.log("--- STANDARD RAG MODE ---");
       let retrievedContext = "";
-      let sourceDocuments: any[] = [];
-  
+    let sourceDocuments: any[] = [];
+
       if (userQuery) {
-        try {
+      try {
           const searchResults = await findRelevantContent(userQuery, projectId || undefined);
-          const validResults = searchResults.filter(r => r.id !== 'error' && r.id !== 'no-results') as Array<{ id: string, text: string, sourcefile: string, projectId?: string }>;
-          
-          if (validResults.length > 0) {
-            sourceDocuments = validResults.map(doc => ({ 
-              id: doc.id,
-              text: doc.text,
-              sourcefile: doc.sourcefile
-            }));
-            retrievedContext = "Context from knowledge base:\n";
-            validResults.forEach((result) => {
-              retrievedContext += `[Source ID: ${result.id}, sourcefile: ${result.sourcefile}] ${result.text}\n`;
-            });
-            data.append({ sourceDocuments }); 
-          } 
-        } catch (searchError) {
-          console.error("Error calling findRelevantContent:", searchError);
+        const validResults = searchResults.filter(r => r.id !== 'error' && r.id !== 'no-results') as Array<{ id: string, text: string, sourcefile: string, projectId?: string }>;
+        
+        if (validResults.length > 0) {
+          sourceDocuments = validResults.map(doc => ({ 
+            id: doc.id,
+            text: doc.text,
+            sourcefile: doc.sourcefile
+          }));
+          retrievedContext = "Context from knowledge base:\n";
+          validResults.forEach((result) => {
+            retrievedContext += `[Source ID: ${result.id}, sourcefile: ${result.sourcefile}] ${result.text}\n`;
+          });
+          data.append({ sourceDocuments });
+        } 
+      } catch (searchError) {
+        console.error("Error calling findRelevantContent:", searchError);
           // Potentially stream an error message back to the user or handle gracefully
-        }
       }
-      
-      const messagesWithContext: CoreMessage[] = [...messages];
-      if (retrievedContext && lastUserMessage) {
-          const lastUserMessageIndex = messagesWithContext.findLastIndex(m => m.role === 'user');
-          if (lastUserMessageIndex !== -1 && typeof messagesWithContext[lastUserMessageIndex].content === 'string') {
+    }
+    
+      const messagesWithContext: CoreMessage[] = [...currentMessagesArray]; // Use currentMessagesArray for standard RAG context building
+    if (retrievedContext && lastUserMessage) {
+        const lastUserMessageIndex = messagesWithContext.findLastIndex(m => m.role === 'user');
+        if (lastUserMessageIndex !== -1 && typeof messagesWithContext[lastUserMessageIndex].content === 'string') {
               // Append context to the last user message content
-              messagesWithContext[lastUserMessageIndex].content = `${messagesWithContext[lastUserMessageIndex].content}\n\n${retrievedContext}`;
-          } else {
+            messagesWithContext[lastUserMessageIndex].content = `${messagesWithContext[lastUserMessageIndex].content}\n\n${retrievedContext}`;
+        } else {
               // Fallback: if no user message or content isn't string, add context as a system message
-              messagesWithContext.unshift({ role: 'system', content: retrievedContext });
-          }
-      }
-  
-      const result = await streamText({
-        model: azure(process.env.AZURE_DEPLOYMENT_NAME!),
-        messages: messagesWithContext,
-        system: systemPromptToUse,
-        temperature: temperatureToUse,
-        maxTokens: maxTokensToUse,
-        onFinish() {
-          data.close();
+             messagesWithContext.unshift({ role: 'system', content: retrievedContext });
         }
-      });
-      return new StreamingTextResponse(result.toAIStream(), {}, data);
+    }
+
+    const result = await streamText({
+      model: azure(process.env.AZURE_CHAT_DEPLOYMENT_NAME!),
+      messages: messagesWithContext, // Ensure standard RAG uses the correctly scoped messages
+      system: systemPromptToUse,
+      temperature: temperatureToUse,
+      maxTokens: maxTokensToUse,
+      onFinish() {
+        data.close();
+      }
+    });
+    return new StreamingTextResponse(result.toAIStream(), {}, data);
     }
 
   } catch (error: unknown) {

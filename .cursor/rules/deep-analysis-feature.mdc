@@ -1,0 +1,83 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Deep Analysis Feature Overview
+
+This document outlines the "Deep Analysis" feature, designed to provide comprehensive, multi-document synthesis in response to user queries. It leverages a map-reduce style architecture with dynamically generated prompts for tailored analysis.
+
+## Core Functionality
+
+When activated, Deep Analysis mode processes **all** documents within the currently selected project to generate a synthesized answer. This differs from standard RAG, which uses only the most semantically relevant chunks. It's intended for queries requiring a holistic understanding across the entire project corpus.
+
+## User Workflow
+
+1.  **Activation:** The user enables "Deep Analysis" mode via a UI toggle in the chat interface ([components/chat-interface.tsx](mdc:components/chat-interface.tsx)).
+2.  **Query Submission:** The user submits their query.
+3.  **Backend Processing:** The request hits the chat API endpoint ([app/(preview)/api/chat/route.ts](mdc:app/(preview)/api/chat/route.ts)) with an `isDeepAnalysisMode: true` flag.
+4.  **Progress Updates (Optional but Implemented):** The frontend ([components/chat-interface.tsx](mdc:components/chat-interface.tsx)) displays status messages (e.g., "Analyzing document X of Y...") streamed from the backend via the `StreamData` object.
+5.  **Response:** The user receives a single, synthesized answer that incorporates information from across all relevant project documents, with citations pointing to original source document IDs where applicable.
+
+## Backend Orchestration (Map-Reduce Style)
+
+The main orchestration logic resides in [app/(preview)/api/chat/route.ts](mdc:app/(preview)/api/chat/route.ts).
+
+### 1. Dynamic "Map" Prompt Generation
+*   **Action:** [app/actions/generateDynamicMapPrompt.ts](mdc:app/actions/generateDynamicMapPrompt.ts)
+*   **Input:** The original user query.
+*   **Process:** An LLM call, guided by `META_PROMPT_FOR_MAP_PROMPT_GENERATION` within this action, generates a *specific "Map" prompt*. This "Map" prompt is tailored to instruct another LLM (the Map AI) on how to analyze individual documents to extract information relevant to the user's original query, ensuring `[Source ID: <ID_VALUE>]` markers are preserved if found.
+
+### 2. "Map" Phase (Per-Document Analysis)
+*   **Data Retrieval:**
+    *   `getAllProjectDocumentReferences(projectId)` (in [app/(preview)/api/chat/route.ts](mdc:app/(preview)/api/chat/route.ts)): Fetches all document IDs and names for the current project from the database (Prisma `Document` model), filtering out those with null or empty `fileName`.
+    *   `getDocumentContentById(docId)` (in [app/(preview)/api/chat/route.ts](mdc:app/(preview)/api/chat/route.ts)): For each document, retrieves its full `extractedText` from the database (Prisma `Document` model, `extractedText` field).
+        *   **Critical Prerequisite:** The `extractedText` field in the `Document` table ([prisma/schema.prisma](mdc:prisma/schema.prisma)) must be populated with the full raw text during document ingestion. If empty, the document is skipped.
+*   **Processing:**
+    *   For each document, an LLM call (non-streaming `generateText`) is made using the dynamically generated "Map" prompt from Step 1, with the document's `extractedText` injected.
+    *   The system prompt for this Map AI is currently static: "You are an AI assistant performing a specific analysis task on the provided document text."
+    *   This phase extracts query-relevant information and associated `[Source ID: <ID_VALUE>]` (if found) from the document.
+    *   Intermediate results (extracted info + source ID, tagged with document name) are collected.
+    *   All prompts and LLM responses for this phase are logged by the server.
+
+### 3. Dynamic "Reduce" System Prompt Generation
+*   **Action:** [app/actions/generateDynamicReducePromptAction.ts](mdc:app/actions/generateDynamicReducePromptAction.ts)
+*   **Input:** The original user query and a summary of the types of information gathered during the map phase (currently a heuristic-based summary generated in [app/(preview)/api/chat/route.ts](mdc:app/(preview)/api/chat/route.ts)).
+*   **Process:** An LLM call, guided by `META_PROMPT_FOR_REDUCE_PROMPT_GENERATION` within this action, generates a *specific "Reduce System Prompt"*. This prompt is tailored to instruct the Reduce AI on how to synthesize the aggregated map phase outputs into a coherent answer, potentially including creative generation or specific analytical tasks based on the user query and map data. It also guides the Reduce AI on citing sources, handling insufficient information, and suggesting follow-up questions.
+
+### 4. "Reduce" Phase (Synthesis)
+*   **Input:** All intermediate results (the analyses) from the "Map" phase are consolidated into a single text block.
+*   **Process:** A single, final LLM call (streaming `streamText`) is made using the dynamically generated "Reduce System Prompt" from Step 3.
+    *   The consolidated map results are passed as the user message to this LLM.
+    *   This prompt emphasizes synthesizing findings, identifying patterns, accurately citing original `[Source ID: <ID_VALUE>]` markers, and potentially performing creative tasks or suggesting follow-up questions.
+    *   If dynamic reduce prompt generation fails, a static fallback prompt is used.
+*   **Output:** The final synthesized answer is streamed back to the user via `StreamingTextResponse`.
+*   All prompts, the aggregated input to the Reduce AI, and the full final response from the Reduce AI are logged by the server.
+
+## Key Files & Components
+
+*   **Chat API Endpoint (Main Orchestrator):** [app/(preview)/api/chat/route.ts](mdc:app/(preview)/api/chat/route.ts)
+*   **Dynamic "Map" Prompt Generation Action:** [app/actions/generateDynamicMapPrompt.ts](mdc:app/actions/generateDynamicMapPrompt.ts)
+*   **Dynamic "Reduce" System Prompt Generation Action:** [app/actions/generateDynamicReducePromptAction.ts](mdc:app/actions/generateDynamicReducePromptAction.ts)
+*   **Frontend Chat UI & State Management:** [components/chat-interface.tsx](mdc:components/chat-interface.tsx)
+*   **Message Rendering:** [components/message-container.tsx](mdc:components/message-container.tsx)
+*   **Prisma Schema (Database Model):** [prisma/schema.prisma](mdc:prisma/schema.prisma) (specifically the `Document` model with `extractedText`).
+
+## Prerequisites
+
+1.  **Database Schema:** The `Document` model in `prisma/schema.prisma` must include `extractedText: String?`. Migrations (`npx prisma migrate dev`) and Prisma client generation (`npx prisma generate`) are required.
+2.  **Document Ingestion:** The document upload process must populate the `extractedText` field with the full raw text from document intelligence services. This is a critical external dependency.
+3.  **Environment Variables:** Correct configuration for Azure OpenAI (for LLM calls, including `AZURE_PROMPT_GEN_DEPLOYMENT_NAME`, `AZURE_DEEP_ANALYSIS_MAP_DEPLOYMENT_NAME`, `AZURE_DEEP_ANALYSIS_REDUCE_DEPLOYMENT_NAME`), Azure AI Search (if used), and database.
+
+## Debugging Notes
+*   The system includes a "single document debug mode" for Deep Analysis, activated by prefixing the user query with `DEBUG_MAP_PHASE_SINGLE_DOC: `. This processes only the first document and streams its map phase analysis directly to the UI.
+*   Extensive server-side logging is in place for all generated prompts (map and reduce), LLM inputs, and LLM outputs for both phases.
+*   The UI in [components/chat-interface.tsx](mdc:components/chat-interface.tsx) uses a `forceUIRefreshKey` to ensure the `MessageContainer` re-renders after a Deep Analysis stream completes, addressing previous UI update issues.
+
+## Future Considerations / Potential Improvements
+
+*   **Content Retrieval from `blobUri`:** Fully implement fetching and text extraction from `blobUri` in `getDocumentContentById` as a robust fallback if `extractedText` is missing for older documents or different ingestion paths.
+*   **Error Handling & Partial Results:** More sophisticated error handling during the "Map" phase (e.g., if a single document analysis fails). Decide whether to return partial results or indicate specific document failures.
+*   **Cost/Performance Optimization:** For very large projects (many hundreds or thousands of documents), explore further optimizations like batching "Map" calls, more aggressive summarization in the "Map" phase, or multi-level "Reduce" steps.
+*   **User Feedback for Long Processes:** Enhance UI feedback for the duration of the Deep Analysis, possibly with more granular progress.
+*   **Model Selection:** Allow configuration of different LLM models (e.g., a more powerful one for the "Reduce" phase) via environment variables.

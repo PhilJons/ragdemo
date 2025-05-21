@@ -24,6 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { DEFAULT_SYSTEM_PROMPTS, type SystemPrompt } from "@/lib/prompt-constants";
 import CreateProjectDialog from "./create-project-dialog";
 import { Label } from "@/components/ui/label";
+import Image from "next/image";
 
 // --- SystemPrompt interface and DEFAULT_SYSTEM_PROMPTS are MOVED to lib/prompt-constants.ts ---
 // Will import them later
@@ -123,18 +124,12 @@ const MarkdownComponents = {
   ),
 };
 
-const ThemeChanger = () => {
+const ThemeChanger = ({ theme, setTheme }: { theme: string | undefined, setTheme: (theme: string) => void }) => {
   const [mounted, setMounted] = useState(false);
-  const { theme, setTheme } = useTheme();
-
   useEffect(() => {
     setMounted(true);
   }, []);
-
-  if (!mounted) {
-    return null;
-  }
-
+  if (!mounted) return null;
   return (
     <div className="flex items-center space-x-2">
       <Sun className="h-[1.2rem] w-[1.2rem]" />
@@ -151,6 +146,7 @@ const ThemeChanger = () => {
 };
 
 export default function ChatInterface() {
+  const { theme, setTheme } = useTheme();
   const isLargeScreen = useMediaQuery({ minWidth: 768 });
   const [toolCall, setToolCall] = useState<string>();
   const [error, setError] = useState<string | null>(null);
@@ -185,6 +181,18 @@ export default function ChatInterface() {
   const [currentDeepAnalysisStatus, setCurrentDeepAnalysisStatus] = useState<string | null>(null);
   // --- End State for Deep Analysis ---
 
+  // State to help force UI refresh after streaming, if needed
+  const [forceUIRefreshKey, setForceUIRefreshKey] = useState<number>(0);
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const citationPanelRef = useRef<ImperativePanelHandle>(null);
+
+  // Add state for the create project dialog
+  const [isCreateProjectDialogOpen, setIsCreateProjectDialogOpen] = useState(false);
+
+  // Ref to hold chat history for Deep Analysis API requests
+  const messagesRef = useRef<any[]>([]);
+
   const { 
     messages, input, handleInputChange, handleSubmit, isLoading, data, setMessages
   } = useChat({
@@ -193,12 +201,25 @@ export default function ChatInterface() {
       selectedSystemPromptContent: currentChatSystemPromptContent,
       temperature: currentChatTemperature,
       maxTokens: currentChatMaxTokens,
-      projectId: activeChatProjectId,
+      projectId: activeChatProjectId, 
       isDeepAnalysisMode: isDeepAnalysisMode, // Added for Deep Analysis
+      chatHistory: messagesRef.current, // Use ref to avoid linter error
     },
-    onFinish: () => {
-      // Clear deep analysis status when a message completes
-      setCurrentDeepAnalysisStatus(null);
+    onFinish: (message) => { // message argument might contain the final message
+      console.log("DEBUG: useChat onFinish triggered. Full message object:", message);
+      // Clear deep analysis status only if it's not an error and not a debug stream
+      // The deep analysis status "Deep Analysis Complete." is set by the backend.
+      // We can set it to null here if the last message from data wasn't "Deep Analysis Complete."
+      // or if we want to ensure it always clears after the main content stream finishes.
+      // For now, let the backend's "Deep Analysis Complete." be the final status shown.
+      // If isDeepAnalysisMode is true and the final status isn't "Deep Analysis Complete.", then clear it.
+      if (isDeepAnalysisMode && currentDeepAnalysisStatus !== "Deep Analysis Complete. Final answer stream finished.") {
+        setCurrentDeepAnalysisStatus(null);
+      } else if (!isDeepAnalysisMode) {
+        setCurrentDeepAnalysisStatus(null); // Always clear for non-deep analysis
+      }
+      setForceUIRefreshKey(prevKey => prevKey + 1);
+      console.log("DEBUG: ForceUIRefreshKey incremented to trigger re-render.");
     },
     onError: (error: any) => {
       console.error("API Error:", error); 
@@ -218,20 +239,11 @@ export default function ChatInterface() {
       setCurrentDeepAnalysisStatus(null); // Clear status on error too
     },
   });
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const citationPanelRef = useRef<ImperativePanelHandle>(null);
 
-  // Add state for the create project dialog
-  const [isCreateProjectDialogOpen, setIsCreateProjectDialogOpen] = useState(false);
-
-  // Initialize global/default prompts once from constants (when they are imported)
+  // Update chat history ref whenever messages change
   useEffect(() => {
-    // This will be populated once DEFAULT_SYSTEM_PROMPTS is imported
-    // For now, systemPrompts will be empty, then set by import later
-    // setSystemPrompts(IMPORTED_DEFAULT_SYSTEM_PROMPTS);
-    // setSelectedPromptName(IMPORTED_DEFAULT_SYSTEM_PROMPTS[0]?.name || "");
-    // setDefaultPromptNames(IMPORTED_DEFAULT_SYSTEM_PROMPTS.map(p => p.name));
-  }, []); // Empty dependency array, runs once
+    messagesRef.current = messages;
+  }, [messages]);
 
   // Fetch projects on component mount and when activeChatProjectId changes (to refresh if needed from elsewhere)
   useEffect(() => {
@@ -338,30 +350,44 @@ export default function ChatInterface() {
 
   // Process data stream for sourceDocuments and deepAnalysisStatus
   useEffect(() => {
-    if (data && Array.isArray(data)) {
-      // console.log("Processing data stream:", JSON.stringify(data)); // Can be very verbose
+    if (data && Array.isArray(data)) { 
+      // Log the entire data array for debugging what the client receives.
+      // Use JSON.stringify to ensure the full structure is logged, especially for nested objects.
+      console.log('DEBUG: Client received data object:', JSON.stringify(data, null, 2));
+
+      let latestStatus: string | null = null;
+      // Iterate backwards through the data array to find the most recent deepAnalysisStatus.
+      // This ensures that if multiple status updates are in the array, we pick the last one.
+      for (let i = data.length - 1; i >= 0; i--) {
+        const item = data[i];
+        if (typeof item === 'object' && item !== null && item.hasOwnProperty('deepAnalysisStatus')) {
+          const statusItem = item as { deepAnalysisStatus?: unknown }; // Type assertion
+          if (typeof statusItem.deepAnalysisStatus === 'string') {
+            latestStatus = statusItem.deepAnalysisStatus;
+            break; // Found the most recent status, no need to look further
+          }
+        }
+      }
+
+      if (latestStatus) {
+        // Log what status is being set and the current isLoading state.
+        // This helps verify if status updates are happening while isLoading is true.
+        console.log('DEBUG: Client: Setting deepAnalysisStatus to:', latestStatus, `(Current isLoading: ${isLoading})`);
+        setCurrentDeepAnalysisStatus(latestStatus);
+      }
+
+      // Handle sourceDocuments separately (original logic for this part was fine)
       const newDocumentMap: Record<string, { text: string; sourcefile: string }> = {};
       let foundDocs = false;
-      let deepStatusUpdate: string | null = null;
-
       data.forEach(item => {
-        // Ensure item is an object and not null before trying to access properties
         if (typeof item === 'object' && item !== null && !Array.isArray(item)) {
-          // Handle sourceDocuments
           if (item.hasOwnProperty('sourceDocuments') && Array.isArray(item.sourceDocuments)) {
             (item.sourceDocuments as any[]).forEach((doc: any) => {
-              if (doc && doc.id && doc.text) {
+              if (doc && doc.id && doc.text && doc.sourcefile) { // ensure sourcefile is also present
                 newDocumentMap[doc.id] = { text: doc.text, sourcefile: doc.sourcefile };
                 foundDocs = true;
               }
             });
-          }
-          // Handle deepAnalysisStatus
-          // Check if item has deepAnalysisStatus and it's a string
-          const statusItem = item as { deepAnalysisStatus?: unknown }; // Type assertion
-          if (statusItem.deepAnalysisStatus && typeof statusItem.deepAnalysisStatus === 'string') {
-            deepStatusUpdate = statusItem.deepAnalysisStatus;
-            console.log("Deep Analysis Status Update:", deepStatusUpdate);
           }
         }
       });
@@ -369,14 +395,20 @@ export default function ChatInterface() {
       if (foundDocs) {
         setDocumentMap(prevMap => {
           const updatedMap = { ...prevMap, ...newDocumentMap };
+          // console.log('DEBUG: Client: Updated documentMap:', updatedMap); // Optional: log if needed
           return updatedMap;
         });
       }
-      if (deepStatusUpdate) {
-        setCurrentDeepAnalysisStatus(deepStatusUpdate);
-      }
     }
-  }, [data]);
+  }, [data, isLoading, setDocumentMap]); // Added isLoading to dependency array for logging. setDocumentMap is stable but good practice.
+
+  // Debug log: print all assistant messages after each update
+  useEffect(() => {
+    const assistantMessages = messages.filter(m => m.role === 'assistant');
+    if (assistantMessages.length > 0) {
+      console.log('DEBUG: Assistant messages after update:', assistantMessages.map(m => m.content));
+    }
+  }, [messages]);
 
   // Scroll handler to update isAtBottom state
   const handleScroll = useCallback(() => {
@@ -388,18 +420,17 @@ export default function ChatInterface() {
     }
   }, []);
 
-  // Auto scroll to bottom only if user is already near the bottom
+  // Always scroll to bottom when messages change (force UI update)
   useEffect(() => {
-    if (isAtBottom) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
-    }
-  }, [messages, isAtBottom]); // Depend on messages AND isAtBottom
+    console.log('DEBUG: useEffect (messages) fired, scrolling to bottom. Messages:', messages);
+    messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+  }, [messages]);
 
   const handleSubmitWithErrorReset = (event: React.FormEvent) => {
     setError(null);
     // Before submitting, if deep analysis mode is on, perhaps clear the status or set to "Initiating..."
     if (isDeepAnalysisMode) {
-        setCurrentDeepAnalysisStatus("Initiating Deep Analysis...");
+        setCurrentDeepAnalysisStatus("Initiating Deep Analysis query..."); // Updated initial message
     }
     handleSubmit(event);
   };
@@ -799,19 +830,18 @@ export default function ChatInterface() {
       <ResizablePanelGroup direction="horizontal">
         <ResizablePanel id="chat-panel">
           <div className="flex flex-col min-w-0 h-screen bg-background">
-            <div className="flex flex-row justify-between items-center p-4">
+            <div className="relative flex items-center min-h-[48px] p-4">
               <div className="flex items-center space-x-2 sm:space-x-4">
-                <ThemeChanger />
+                <ThemeChanger theme={theme} setTheme={setTheme} />
                 <Button variant="ghost" size="icon" onClick={() => setIsSettingsOpen(true)} title="Settings">
                   <Settings className="h-[1.2rem] w-[1.2rem]" />
                   <span className="sr-only">Settings</span>
                 </Button>
-                {/* Active Project Selector */} 
+                {/* Active Project Selector - Conditionally Rendered if projects exist */}
                 {projects.length > 0 && (
                   <Select 
                     value={activeChatProjectId || "no-project"}
                     onValueChange={(value) => {
-                      // Handle the special "create-new" value
                       if (value === "create-new") {
                         setIsCreateProjectDialogOpen(true);
                         return;
@@ -836,17 +866,39 @@ export default function ChatInterface() {
                     </SelectContent>
                   </Select>
                 )}
-                {isLoadingProjects && <p className="text-xs text-muted-foreground">Loading projects...</p>}
+                {/* Always visible "Create New Project" Button if no projects exist OR as an alternative access point */}
+                {(projects.length === 0 && !isLoadingProjects) && (
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => setIsCreateProjectDialogOpen(true)} 
+                    className="ml-2 text-xs md:text-sm h-9"
+                  >
+                    <PlusCircle className="mr-2 h-4 w-4" />
+                    Create Project
+                  </Button>
+                )}
+                {isLoadingProjects && <p className="text-xs text-muted-foreground ml-2">Loading projects...</p>}
               </div>
-              <div className="flex items-center">
+              {/* Absolutely Centered Logo and Title (only show if no chat started) */}
+              {messages.length > 0 && (
+                <div className="absolute left-1/2 -translate-x-1/2 flex flex-col justify-center h-full items-center">
+                  <span className="block">
+                    <Image
+                      src={theme === 'dark' ? '/Aura_logo_white.svg' : '/Aura_logo.svg'}
+                      alt="Aura Logo"
+                      width={70}
+                      height={8}
+                      className="h-3 mb-1 mx-auto"
+                      priority
+                    />
+                  </span>
+                  <h1 className="text-lg font-bold text-center">Secure RAG</h1>
+                </div>
+              )}
+              <div className="absolute right-4 top-0 bottom-0 my-auto flex items-center">
                 <LoginButton />
               </div>
-            </div>
-            <div className="text-center mb-4 md:mb-8">
-              <h1 className="text-2xl font-bold mb-2">Secure RAG Demo</h1>
-              <p className="text-sm text-muted-foreground">
-                Explore Retrieval-Augmented Generation hosted securely on Azure. Manage data sources and system prompts via the Settings panel (⚙️) in the top left.
-              </p>
             </div>
 
             <MessageContainer
@@ -859,33 +911,28 @@ export default function ChatInterface() {
               documentMap={documentMap}
               scrollContainerRef={scrollContainerRef}
               onScroll={handleScroll}
+              currentDeepAnalysisStatus={currentDeepAnalysisStatus}
+              key={forceUIRefreshKey}
             />
 
-            {/* Deep Analysis Switch and Status */} 
-            <div className="px-4 py-2 border-t flex items-center space-x-3 bg-background">
-                <div className="flex items-center space-x-2">
-                    <Switch
-                        id="deep-analysis-toggle"
-                        checked={isDeepAnalysisMode}
-                        onCheckedChange={setIsDeepAnalysisMode}
-                        disabled={isLoading} // Disable while a message is in flight
-                    />
-                    <Label htmlFor="deep-analysis-toggle" className="text-sm text-muted-foreground">
-                        Deep Analysis
-                    </Label>
-                </div>
-            </div>
-            {currentDeepAnalysisStatus && (
-                <div className="px-4 pb-2 text-xs text-muted-foreground text-center">
-                    {currentDeepAnalysisStatus}
-                </div>
-            )}
-            {/* End Deep Analysis Switch and Status */}
             <ChatInput 
               input={input} 
               onInputChange={handleInputChange} 
               onSubmit={handleSubmitWithErrorReset}
               isLoading={isLoading}
+              renderDeepAnalysisToggle={
+                <div className="flex items-center space-x-2 mt-2">
+                  <Switch
+                    id="deep-analysis-toggle"
+                    checked={isDeepAnalysisMode}
+                    onCheckedChange={setIsDeepAnalysisMode}
+                    disabled={isLoading}
+                  />
+                  <Label htmlFor="deep-analysis-toggle" className="text-sm text-muted-foreground">
+                    Deep Analysis
+                  </Label>
+                </div>
+              }
             />
           </div>
         </ResizablePanel>

@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Message } from "ai";
 import ProjectOverview from "./project-overview";
@@ -16,6 +16,7 @@ interface MessageContainerProps {
   documentMap: Record<string, { text: string; sourcefile: string }>;
   scrollContainerRef: React.RefObject<HTMLDivElement>;
   onScroll: () => void;
+  currentDeepAnalysisStatus: string | null;
 }
 
 // Custom components for Markdown rendering using standard Tailwind
@@ -190,7 +191,12 @@ const MessageItem: React.FC<{
 MessageItem.displayName = "MessageItem";
 
 const MessageContainer: React.FC<MessageContainerProps> = React.memo(
-  ({ messages, error, toolCall, isLoading, showCitation, messagesEndRef, documentMap, scrollContainerRef, onScroll }) => {
+  ({ messages, error, toolCall, isLoading, showCitation, messagesEndRef, documentMap, scrollContainerRef, onScroll, currentDeepAnalysisStatus }) => {
+    useEffect(() => {
+      // Smoothly scroll to the bottom when messages change
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, [messages]);
+
     return (
       <div
         ref={scrollContainerRef}
@@ -239,9 +245,11 @@ const MessageContainer: React.FC<MessageContainerProps> = React.memo(
             <div className="flex items-center gap-2 rounded-lg px-4 py-2 bg-muted dark:bg-gray-800 text-foreground dark:text-gray-100">
               <Loader2 className="h-4 w-4 animate-spin" />
               <span>
-                {toolCall === "getInformation"
-                  ? "Getting information..."
-                  : "Thinking..."}
+                {currentDeepAnalysisStatus
+                  ? currentDeepAnalysisStatus
+                  : (toolCall === "getInformation"
+                      ? "Getting information..."
+                      : "Thinking...")}
               </span>
             </div>
           </motion.div>
@@ -254,7 +262,8 @@ const MessageContainer: React.FC<MessageContainerProps> = React.memo(
     prev.messages === next.messages &&
     prev.isLoading === next.isLoading &&
     prev.error === next.error &&
-    prev.documentMap === next.documentMap
+    prev.documentMap === next.documentMap &&
+    prev.currentDeepAnalysisStatus === next.currentDeepAnalysisStatus
 );
 
 MessageContainer.displayName = "MessageContainer";

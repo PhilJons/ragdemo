@@ -45,7 +45,7 @@ export const findRelevantContent = async (userQuery: string, projectId?: string)
   try {
     const searchOptions: SearchOptions<object, string> = {
       top: 5, // Note: Semantic ranking operates on top 50 results from initial retrieval.
-      select: ["id", contentColumn, sourcefileFieldName, "projectId"]
+      select: ["id", contentColumn, sourcefileFieldName]
     };
 
     let semanticConfigName: string | undefined;
@@ -71,9 +71,11 @@ export const findRelevantContent = async (userQuery: string, projectId?: string)
       // Use embedding cache (logic restored)
       if (embeddingCache.has(userQuery)) {
         userQueryEmbedded = embeddingCache.get(userQuery)!;
-        console.log("Using cached embedding for query:", userQuery);
+        // Commented out verbose embedding logs
+        // console.log("Using cached embedding for query:", userQuery);
       } else {
-        console.log("Generating new embedding for query:", userQuery);
+        // Commented out verbose embedding logs
+        // console.log("Generating new embedding for query:", userQuery);
         userQueryEmbedded = await generateEmbedding(userQuery); // Uses imported function
         embeddingCache.set(userQuery, userQueryEmbedded);
         // Cache pruning logic (restored)
@@ -81,9 +83,11 @@ export const findRelevantContent = async (userQuery: string, projectId?: string)
           const oldestKey = embeddingCache.keys().next().value;
           if (oldestKey !== undefined) {
             embeddingCache.delete(oldestKey);
-            console.log("Cache size limit reached, removed oldest entry:", oldestKey);
+            // Commented out verbose embedding logs
+            // console.log("Cache size limit reached, removed oldest entry:", oldestKey);
           } else {
-            console.warn("Attempted to prune cache, but oldestKey was undefined despite cache size exceeding limit.");
+            // Commented out verbose embedding logs
+            // console.warn("Attempted to prune cache, but oldestKey was undefined despite cache size exceeding limit.");
           }
         }
       }
@@ -113,14 +117,30 @@ export const findRelevantContent = async (userQuery: string, projectId?: string)
       try {
         // First try using the dedicated projectId field
         searchOptions.filter = `projectId eq '${projectId}'`;
-        console.log(`Filtering search results to project: ${projectId}`);
+        console.log(`[lib/ai/search.ts] Filtering search results to project: ${projectId}`);
       } catch (filterError: any) {
         // Fall back to the sourcefile approach if the projectId field isn't available
-        console.warn(`Error using projectId field for filtering: ${filterError.message}`);
-        console.log("Falling back to sourcefile pattern matching for project filtering");
+        console.warn(`[lib/ai/search.ts] Error using projectId field for filtering: ${filterError.message}`);
+        console.log("[lib/ai/search.ts] Falling back to sourcefile pattern matching for project filtering");
         searchOptions.filter = `search.ismatchscoring('${projectId}', '${sourcefileFieldName}')`;
       }
     }
+
+    // Log search options without the verbose vector
+    const { vectorSearchOptions, ...searchOptionsForLogging } = searchOptions;
+    let loggedVectorInfo = "No vector search.";
+    if (vectorSearchOptions && vectorSearchOptions.queries && vectorSearchOptions.queries.length > 0) {
+      // Create a copy of the query to avoid modifying the original searchOptions
+      const queryForLogging = { ...vectorSearchOptions.queries[0] };
+      // Delete the vector property from the copy for logging purposes
+      // @ts-ignore TS might complain as we are deliberately deleting a required property for logging
+      delete queryForLogging.vector; 
+      loggedVectorInfo = `Vector search query details: ${JSON.stringify(queryForLogging, null, 2)} (vector itself excluded from log)`;
+    }
+    console.log(`[lib/ai/search.ts] Using index: '${searchClient.indexName}'. Search options (vector details logged separately if present, vector array excluded):`, 
+      JSON.stringify(searchOptionsForLogging, null, 2), 
+      loggedVectorInfo
+    );
 
     const searchResults = await searchClient.search(userQuery, searchOptions);
 

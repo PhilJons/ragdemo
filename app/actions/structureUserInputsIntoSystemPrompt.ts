@@ -80,14 +80,13 @@ Structured System Prompt:
 export async function structureUserInputsIntoSystemPromptAction(rawPromptContent: string): Promise<ActionResult> {
   console.log("Attempting to structure prompt for raw input:", rawPromptContent);
 
-  // Basic check for environment variables for the Prompt Generation service
-  const promptGenEndpoint = process.env.AZURE_PROMPT_GEN_ENDPOINT;
-  const promptGenApiKey = process.env.AZURE_PROMPT_GEN_API_KEY;
-  const promptGenDeploymentName = process.env.AZURE_PROMPT_GEN_DEPLOYMENT_NAME; 
-  // Note: AZURE_PROMPT_GEN_RESOURCE_NAME is not directly used by OpenAIClient constructor
-
-  if (!promptGenEndpoint || !promptGenApiKey || !promptGenDeploymentName) {
-    console.error("Prompt Generation Service environment variables are not set. This action will not work. Please check server configuration. Ensure AZURE_PROMPT_GEN_ENDPOINT, AZURE_PROMPT_GEN_API_KEY, and AZURE_PROMPT_GEN_DEPLOYMENT_NAME are defined.");
+  // Use primary Azure OpenAI environment variables
+  const endpoint = process.env.AZURE_OPENAI_ENDPOINT;
+  const apiKey = process.env.AZURE_OPENAI_API_KEY;
+  const deploymentName = process.env.AZURE_PROMPT_GEN_DEPLOYMENT_NAME; // Specific deployment for this task
+  
+  if (!endpoint || !apiKey || !deploymentName) {
+    console.error("Azure OpenAI environment variables for prompt structuring (AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, AZURE_PROMPT_GEN_DEPLOYMENT_NAME) are not set. This action will not work. Please check server configuration.");
     return { success: false, error: "Server configuration error: Missing Prompt Generation Service credentials. Please contact support or check environment variables." };
   }
 
@@ -96,12 +95,12 @@ export async function structureUserInputsIntoSystemPromptAction(rawPromptContent
   try {
     // Initialize OpenAIClient specifically for the Prompt Gen service
     const client = new OpenAIClient(
-      promptGenEndpoint,
-      new AzureKeyCredential(promptGenApiKey)
+      endpoint, // Use primary endpoint
+      new AzureKeyCredential(apiKey) // Use primary API key
     );
 
     // Use the client to get chat completions directly
-    const response = await client.getChatCompletions(promptGenDeploymentName, [
+    const response = await client.getChatCompletions(deploymentName, [
       // We are using the META_PROMPT as the user message here, 
       // as the generateText function is not directly compatible 
       // with this client without more complex wrapping.

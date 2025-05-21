@@ -4,15 +4,23 @@ import { authOptions } from '@/lib/auth'; // Corrected import path
 import prisma from '@/lib/prisma'; // Assuming @ is mapped to app/ or root, and lib is under it
 
 export async function GET(request: Request) {
+  console.log("--- GET /api/projects: Handler Invoked ---"); 
+  const { searchParams } = new URL(request.url);
+  console.log("GET /api/projects: Request URL search params:", searchParams.toString());
+
+  console.log("GET /api/projects: Attempting to get session...");
   const session = await getServerSession(authOptions);
 
   if (!session || !session.user || !(session.user as any).oid) {
+    console.log("GET /api/projects: Unauthorized access - no session or user OID.");
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const userOid = (session.user as any).oid;
+  console.log(`GET /api/projects: Authorized for user OID: ${userOid}`);
 
   try {
+    console.log(`GET /api/projects: Attempting to find user with OID: ${userOid} and include projects...`);
     const userWithProjects = await prisma.user.findUnique({
       where: { oid: userOid },
       include: {
@@ -29,8 +37,10 @@ export async function GET(request: Request) {
     });
 
     if (!userWithProjects) {
+      console.log(`GET /api/projects: User not found for OID: ${userOid}`);
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
+    console.log(`GET /api/projects: Found user and their project associations for OID: ${userOid}`);
 
     // Extract project details (ID and name for now)
     const projects = userWithProjects.projects.map(userProject => ({
@@ -45,16 +55,18 @@ export async function GET(request: Request) {
       // Optionally, include the full activeProjectPrompt object if needed by client
       // activeProjectPrompt: userProject.project.activeProjectPrompt, 
     }));
+    console.log(`GET /api/projects: Successfully mapped ${projects.length} projects.`);
 
     return NextResponse.json(projects);
 
   } catch (error) {
-    console.error("Error fetching projects:", error);
+    console.error("GET /api/projects: Error fetching projects:", error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
 export async function POST(request: Request) {
+  console.log("--- POST /api/projects: Handler Invoked ---");
   const session = await getServerSession(authOptions);
 
   if (!session || !session.user || !(session.user as any).oid) {
